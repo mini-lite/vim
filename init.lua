@@ -1,8 +1,14 @@
+-- Author: Salah Eddine Ghamri
 -- Change log-----------------------------------------------------------------
--- TODO:
+-- TODO: vim command-line
+-- TODO: change caret in normal vim mode
+-- TDOD: add basic commands
+-- TODO: use set_mode that pushes a message to indicate vim mode change
+-- TODO: create an option if vim global or only to doc views
+-- TODO: let user extend commands
 
-
--- DONE: first look
+-- DONE: modal editing
+-- DONE: let user extend keymaps
 ------------------------------------------------------------------------------
 -- mod-version:3
 local core = require "core"
@@ -17,41 +23,47 @@ local vim = {
   search_query = "",
   motion_count = "",
   command_map = {},
+  normal_keys = {},
+  visual_keys = {},
 }
 
--- key detection
+-- keys
+local pressed = {}
+
+-- keys that can modify text
+local modifying_keys = {
+  ["return"] = true,
+  ["backspace"] = true,
+  ["tab"] = true,
+  ["delete"] = true,
+  ["insert"] = true,
+  ["space"] = true
+}
 
 local function handle_normal(text)
-   -- block: insert
-   -- block: backspace
-   -- block: space
-  local block_keys = true
-  if text == ":" then -- do command also
-    vim.mode = "command"
-  elseif text == "i" then
-    vim.mode = "insert"
+  local fn = vim.normal_keys[text]
+  if fn then
+      fn()
   end
-  return block_keys
+  return true --block 
 end
 
 local function handle_command(text)
-  local block_keys = true
+  -- command parser logic here
   local res = true -- return from command
   if res then
      vim.mode = "normal"    
+     block_keys = true
   end
-  return block_keys
+  return true -- block
 end
 
 local function handle_insert(text)
-  local block_keys = false
-  -- just intercept esc
-  if text == "escape" then
-      vim.mode = "normal"
-  end
-  return block_keys
+  -- TODO: define other keys
+  return false
 end
 
+-- Handle printable keys
 local function on_text(text)
   if vim.mode == "normal" then
     return handle_normal(text)
@@ -63,16 +75,31 @@ local function on_text(text)
 end
 
 -- Intercept text input
--- Here so that vim controls all
 local original_on_event = core.on_event
-function core.on_event(type, ...)
-  if type == "textinput" then
-    local text = ...
-    if on_text(text) then
-       return true -- avoid propagation
+function core.on_event(type, a, ...)
+  if type == "textinput" then      
+    if on_text(a) then
+       return true -- block 
     end
+  elseif type == "keypressed" then
+    pressed[a] = true
+
+    if a == "escape" then
+        vim.mode = "normal"
+        return true -- block
+    end
+
+    if vim.mode == "normal" then
+        if modifying_keys[a] then
+            return true -- block in normal mode
+        end
+    end
+
+  elseif type == "keyreleased" then
+    pressed[a] = false
   end
-  return original_on_event(type, ...)
+
+  return original_on_event(type, a, ...)
 end
 
 -- Mode switch
@@ -121,23 +148,11 @@ end
 
 -- Normal mode keymap
 vim.normal_keys = {
-  [":"] = function()
-    core.command_view:enter(":", function(cmd)
-      vim.run_command(cmd)
-    end)
-  end,
-  ["/"] = function()
-    core.command_view:enter("/", function(query)
-      vim.search_forward(query)
-    end)
-  end,
-  ["?"] = function()
-    core.command_view:enter("?", function(query)
-      vim.search_backward(query)
-    end)
-  end,
+  [":"] = function() end,
+  ["/"] = function() end,
+  ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
-  ["i"] = function() vim.set_mode("insert") end,
+  ["i"] = function() vim.mode = "insert" end,
   ["y"] = function()
     local doc = core.active_view.doc
     local line = doc.lines[doc.cursor.line]
@@ -149,7 +164,10 @@ vim.normal_keys = {
     local text = vim.registers['"'] or ""
     doc:insert(doc.cursor, text .. "\n")
   end,
-  ["escape"] = function() vim.set_mode("normal") end,
+}
+
+-- Visula mode keymap
+vim.visual_keys = {
 }
 
 -- Status bar mode indicator
