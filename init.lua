@@ -1,20 +1,26 @@
 -- Author: Salah Eddine Ghamri
+
 -- Change log-----------------------------------------------------------------
--- TODO: vim command-line
+-- TODO: give the command line a name
+-- TODO: show message notifying the change of state
+-- TODO: we need to set space as leader or adapt if user want space as leader
 -- TODO: change caret in normal vim mode
 -- TDOD: add basic commands
--- TODO: use set_mode that pushes a message to indicate vim mode change
 -- TODO: create an option if vim global or only to doc views
 -- TODO: let user extend commands
 
+-- DONE: vim command-line
 -- DONE: modal editing
 -- DONE: let user extend keymaps
 ------------------------------------------------------------------------------
+
 -- mod-version:3
 local core = require "core"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local command_line = require "plugins.command-line"
+command_line.minimal_status_view = true
 
 local vim = {
   mode = "normal", -- visual, command
@@ -26,6 +32,18 @@ local vim = {
   normal_keys = {},
   visual_keys = {},
 }
+
+-- set instance command line
+local instance_command = command_line.new()
+instance_command:set_prompt(":")
+
+-- set forward search line 
+local forward_search = command_line.new()
+forward_search:set_prompt("/")
+
+-- set backward search line 
+local backward_search = command_line.new()
+backward_search:set_prompt("?")
 
 -- keys
 local pressed = {}
@@ -48,16 +66,6 @@ local function handle_normal(text)
   return true --block 
 end
 
-local function handle_command(text)
-  -- command parser logic here
-  local res = true -- return from command
-  if res then
-     vim.mode = "normal"    
-     block_keys = true
-  end
-  return true -- block
-end
-
 local function handle_insert(text)
   -- TODO: define other keys
   return false
@@ -67,8 +75,6 @@ end
 local function on_text(text)
   if vim.mode == "normal" then
     return handle_normal(text)
-  elseif vim.mode == "command" then
-    return handle_command(text)
   elseif vim.mode == "insert" then
     return handle_insert(text)
   end
@@ -79,6 +85,7 @@ local original_on_event = core.on_event
 function core.on_event(type, a, ...)
   if type == "textinput" then      
     if on_text(a) then
+       -- TODO: only when i pressed on_text false
        return true -- block 
     end
   elseif type == "keypressed" then
@@ -86,7 +93,8 @@ function core.on_event(type, a, ...)
 
     if a == "escape" then
         vim.mode = "normal"
-        return true -- block
+        instance_command:cancel_command()
+        return true --block
     end
 
     if vim.mode == "normal" then
@@ -107,11 +115,34 @@ function vim.set_mode(m)
   vim.mode = m
 end
 
--- Command line execution
+local vim_command_map = {
+  w  = { action = "doc:save", desc = "Save file" },
+  q  = { action = "core:quit", desc = "Quit editor" },
+  qa = { action = "core:quit-all", desc = "Quit all" },
+  wq = { action = "doc:save-and-quit", desc = "Save and quit" },
+}
+
 function vim.run_command(cmd)
-  if cmd == "w" then command.perform "doc:save"
-  elseif cmd == "q" then command.perform "core:quit"
-  else core.log("Unknown command: " .. cmd) end
+  local entry = vim_command_map[cmd]
+  if entry then
+    command.perform(entry.action)
+  else
+    core.log("vim unknown command: " .. cmd)
+  end
+end
+
+function vim.get_suggests(input)
+  local suggestions = {}
+  for name, entry in pairs(vim_command_map) do
+    if name:find("^" .. input) then
+      table.insert(suggestions, {
+        name = name,
+        desc = entry.desc or "",
+        action = entry.action
+      })
+    end
+  end
+  return suggestions
 end
 
 -- Minimal search impl
@@ -178,6 +209,23 @@ core.status_view:add_item({
     return { style.text, "[VIM: " .. vim.mode .. "] " }
   end
 })
+
+-- command to launch the command line
+vim.normal_keys[":"] = function()
+  vim.set_mode("command")        
+  instance_command:start_command{
+    submit = function(input)
+      vim.run_command(input)
+      vim.set_mode("normal")     
+    end,
+    suggest = function(input)
+      return vim.get_suggests(input)
+    end,
+    cancel = function()
+      vim.set_mode("normal")     
+    end
+  }
+end
 
 -- Init
 vim.set_mode("normal")
