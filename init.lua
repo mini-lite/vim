@@ -4,11 +4,11 @@
 -- TODO: give the command line a name
 -- TODO: show message notifying the change of state
 -- TODO: we need to set space as leader or adapt if user want space as leader
--- TODO: change caret in normal vim mode
 -- TDOD: add basic commands
 -- TODO: create an option if vim global or only to doc views
 -- TODO: let user extend commands
 
+-- DONE: change caret in normal vim mode
 -- DONE: vim command-line
 -- DONE: modal editing
 -- DONE: let user extend keymaps
@@ -16,6 +16,7 @@
 
 -- mod-version:3
 local core = require "core"
+local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
@@ -92,7 +93,7 @@ function core.on_event(type, a, ...)
     pressed[a] = true
 
     if a == "escape" then
-        vim.mode = "normal"
+        vim.set_mode("normal")
         instance_command:cancel_command()
         return true --block
     end
@@ -112,14 +113,27 @@ end
 
 -- Mode switch
 function vim.set_mode(m)
+    local message = ""
+    if m == "normal" then
+        style.caret_width = common.round(7 * SCALE)
+        command_line.show_message({}, 0)     -- 0 = permanent
+    elseif m == "insert" then
+        style.caret_width = common.round(2 * SCALE)
+        message = {
+            style.accent, "-- INSERT --",
+        }
+        command_line.show_message(message, 0) -- 0 = permanent
+    end
   vim.mode = m
 end
 
+-- TODO: we need a real parser
 local vim_command_map = {
   w  = { action = "doc:save", desc = "Save file" },
   q  = { action = "core:quit", desc = "Quit editor" },
   qa = { action = "core:quit-all", desc = "Quit all" },
   wq = { action = "doc:save-and-quit", desc = "Save and quit" },
+  ee = { action = "doc:reload", desc = "reload fresh" }
 }
 
 function vim.run_command(cmd)
@@ -183,7 +197,7 @@ vim.normal_keys = {
   ["/"] = function() end,
   ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
-  ["i"] = function() vim.mode = "insert" end,
+  ["i"] = function() vim.set_mode("insert") end,
   ["y"] = function()
     local doc = core.active_view.doc
     local line = doc.lines[doc.cursor.line]
@@ -200,15 +214,6 @@ vim.normal_keys = {
 -- Visula mode keymap
 vim.visual_keys = {
 }
-
--- Status bar mode indicator
-core.status_view:add_item({
-  name = "status:vim_mode",
-  alignment = "left",
-  get_item = function()
-    return { style.text, "[VIM: " .. vim.mode .. "] " }
-  end
-})
 
 -- command to launch the command line
 vim.normal_keys[":"] = function()
