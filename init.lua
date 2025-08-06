@@ -1,13 +1,16 @@
 -- Author: Salah Eddine Ghamri
 
 -- Change log-----------------------------------------------------------------
--- TODO: give the command line a name
--- TODO: show message notifying the change of state
+-- TODO: add disable vim config
+-- TODO: normal mode is working outside doc view
+-- TODO: start adding important navigations
 -- TODO: we need to set space as leader or adapt if user want space as leader
 -- TDOD: add basic commands
 -- TODO: create an option if vim global or only to doc views
 -- TODO: let user extend commands
 
+-- DONE: show message notifying the change of state
+-- DONE: give the command line a name
 -- DONE: change caret in normal vim mode
 -- DONE: vim command-line
 -- DONE: modal editing
@@ -20,8 +23,11 @@ local common = require "core.common"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
+
 local command_line = require "plugins.command-line"
-command_line.minimal_status_view = true
+command_line.set_item_name("status:vim")
+command_line.add_status_item()
+command_line.minimal_status_view = true -- only item will show
 
 local vim = {
   mode = "normal", -- visual, command
@@ -49,6 +55,12 @@ backward_search:set_prompt("?")
 -- keys
 local pressed = {}
 
+-- Combined keys
+-- g, t/T, f/F, numbers
+local pending_key = nil
+local pending_nbr = nil
+local go_to_line_nbr = 1
+
 -- keys that can modify text
 local modifying_keys = {
   ["return"] = true,
@@ -60,6 +72,33 @@ local modifying_keys = {
 }
 
 local function handle_normal(text)
+  -- f, F: Find commands (character navigation).
+  -- t, T: Till/To commands (stop before/after character).
+  if pending_key then
+    local combo = pending_key .. text
+    go_to_line_nbr = tonumber(pending_nbr) or 1
+    pending_key = nil
+    pending_nbr = nil
+    local fn = vim.normal_keys[combo]
+    if fn then fn() end
+    return true
+  end
+
+  -- g: Goto/Prefix command (for extended motions).
+  if text == "g" then
+    pending_key = text
+    return true -- wait for next key
+  end
+
+  if tonumber(text) then
+      if pending_nbr then
+         pending_nbr = pending_nbr .. text
+      else
+         pending_nbr = text
+      end
+      return true
+  end
+  
   local fn = vim.normal_keys[text]
   if fn then
       fn()
@@ -82,31 +121,35 @@ local function on_text(text)
 end
 
 -- Intercept text input
+-- TODO: if we lose focus do not react vim is asleep
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
-  if type == "textinput" then      
-    if on_text(a) then
-       -- TODO: only when i pressed on_text false
-       return true -- block 
-    end
-  elseif type == "keypressed" then
-    pressed[a] = true
 
-    if a == "escape" then
-        vim.set_mode("normal")
-        instance_command:cancel_command()
-        return true --block
-    end
-
-    if vim.mode == "normal" then
-        if modifying_keys[a] then
-            return true -- block in normal mode
+  if core.active_view.doc and core.active_view.doc.filename then
+    if type == "textinput" then      
+        if on_text(a) then
+        -- TODO: only when i pressed on_text false
+        return true -- block 
         end
-    end
+    elseif type == "keypressed" then
+        pressed[a] = true
 
-  elseif type == "keyreleased" then
-    pressed[a] = false
-  end
+        if a == "escape" then
+            vim.set_mode("normal")
+            instance_command:cancel_command()
+            return true --block
+        end
+
+        if vim.mode == "normal" then
+            if modifying_keys[a] then
+                return true -- block in normal mode
+            end
+        end
+
+    elseif type == "keyreleased" then
+        pressed[a] = false
+    end
+  end -- active view
 
   return original_on_event(type, a, ...)
 end
@@ -191,23 +234,40 @@ function vim.search_word_under_cursor()
   if word then vim.search_forward(word) end
 end
 
--- Normal mode keymap
+-- normal keymaps
 vim.normal_keys = {
   [":"] = function() end,
   ["/"] = function() end,
   ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
-  ["i"] = function() vim.set_mode("insert") end,
+
+  ["i"] = function()
+    vim.set_mode("insert")
+  end,
+
   ["y"] = function()
     local doc = core.active_view.doc
     local line = doc.lines[doc.cursor.line]
     vim.registers['"'] = line
     core.log("Yanked line")
   end,
+
   ["p"] = function()
     local doc = core.active_view.doc
     local text = vim.registers['"'] or ""
     doc:insert(doc.cursor, text .. "\n")
+  end,
+
+  ["gg"] = function()
+    local doc = core.active_view.doc
+    doc:set_selection(go_to_line_nbr, 1)
+  end,
+
+  ["G"] = function()
+    local doc = core.active_view.doc
+    local last_line = #doc.lines
+    local last_col = #(doc.lines[last_line] or "") + 1
+    doc:set_selection(last_line, last_col)
   end,
 }
 
