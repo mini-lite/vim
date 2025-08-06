@@ -1,6 +1,8 @@
 -- Author: Salah Eddine Ghamri
 
 -- Change log-----------------------------------------------------------------
+-- TODO: visual select does not start from current char
+-- TODO: if we lose focus do not react vim is asleep
 -- TODO: track vim commands using a state
 -- TODO: normal mode is working outside doc view
 -- TODO: start adding important navigations
@@ -33,13 +35,14 @@ command_line.add_status_item()
 command_line.minimal_status_view = true -- only item will show
 
 local vim = {
-  mode = "normal", -- normal, visual, command
+  mode = "normal", -- normal, visual, command, insert
   registers = { ['"'] = "" },
   command_buffer = "",
   search_query = "",
   command_map = {},
   operators = {},
   motions = {},
+  last_selection = {},
   normal_keys = {},
   visual_keys = {},
 }
@@ -52,10 +55,17 @@ local state = {
   register = nil,
 }
 
--- helper
+-- helper for debug
 local function echo(fmt, ...)
   local text = string.format(fmt, ...)
   command_line.show_message({text}, 1)
+end
+
+-- remove selections 
+local function deselect()
+  for idx, line1, col1, _, _ in core.active_view.doc:get_selections(true) do
+      core.active_view.doc:set_selections(idx, line1, col1)
+  end
 end
 
 -- normalize count, default 1
@@ -101,7 +111,32 @@ local modifying_keys = {
 local pending = ""
 local prev_dig = false
 
-local function handle_normal(key)
+-- input handler
+local function handle_input(key)
+  -- go insert
+  if vim.mode == "insert" or vim.mode == "command" then
+    return false
+  end
+
+  -- high prio keys
+  if vim.mode == "normal" then
+    -- normal key like i and v 
+    if vim.normal_keys and vim.normal_keys[key] then
+        vim.normal_keys[key]()
+        pending = ""
+        reset_state()
+        return true
+    end
+  elseif vim.mode == "visual" then 
+    -- visual key 
+    if vim.visual_keys and vim.visual_keys[key] then
+        vim.visual_keys[key]()
+        pending = ""
+        reset_state()
+        return true
+    end
+  end
+
   -- accumulate count digits only if no operator pending
   if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig )) then
     prev_dig = true
@@ -133,13 +168,6 @@ local function handle_normal(key)
     return true
   end
 
-  -- normal key 
-  if vim.normal_keys and vim.normal_keys[key] then
-    vim.normal_keys[key]()
-    reset_state()
-    return true
-  end
-
   -- if pending gets too long, reset
   if #pending > 2 then
     pending = ""
@@ -150,29 +178,19 @@ local function handle_normal(key)
   return true
 end
 
-local function handle_insert(text)
-  return false
-end
-
 -- Handle printable keys
 local function on_text(text)
-  if vim.mode == "normal" then
-    return handle_normal(text)
-  elseif vim.mode == "insert" then
-    return handle_insert(text)
-  end
+    return handle_input(text)
 end
 
--- Intercept text input
--- TODO: if we lose focus do not react vim is asleep
+-- on_event override
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
 
   if core.active_view.doc and core.active_view.doc.filename then
     if type == "textinput" then      
         if on_text(a) then
-        -- TODO: only when i pressed on_text false
-        return true -- block 
+          return true -- block 
         end
     elseif type == "keypressed" then
         pressed[a] = true
@@ -181,6 +199,7 @@ function core.on_event(type, a, ...)
             vim.set_mode("normal")
             reset_state()
             instance_command:cancel_command()
+            deselect()
             return true --block
         end
 
@@ -198,7 +217,7 @@ function core.on_event(type, a, ...)
   return original_on_event(type, a, ...)
 end
 
--- Mode switch
+-- mode switch
 function vim.set_mode(m)
     local message = ""
     if m == "normal" then
@@ -208,6 +227,12 @@ function vim.set_mode(m)
         style.caret_width = common.round(2 * SCALE)
         message = {
             style.accent, "-- INSERT --",
+        }
+        command_line.show_message(message, 0) -- 0 = permanent
+    elseif m == "visual" then
+        style.caret_width = common.round(7 * SCALE)
+        message = {
+            style.text, "-- VISUAL --",
         }
         command_line.show_message(message, 0) -- 0 = permanent
     end
@@ -278,7 +303,7 @@ function vim.search_word_under_cursor()
   if word then vim.search_forward(word) end
 end
 
--- operators
+-- define operators ---------------------------------------------------------
 vim.operators = {
   -- ["d"]
   -- ["gu"]
@@ -301,12 +326,8 @@ vim.operators = {
   end,
 }
 
--- motions ----------------------------------------------------
+-- define motions ----------------------------------------------------
 local config = require "core.config"
-
---local function is_non_word(char)
---  return config.non_word_chars:find(char, nil, true)
---end
 
 -- helper text objects
 local classify
@@ -432,23 +453,21 @@ local function get_motion_fn(name)
   return nil
 end
 
-
 vim.motions = {
-  ["h"] = function(count)
-    local dv = core.active_view
-    local fn = get_motion_fn("previous-char")
-    if not fn then return end
-    for _ = 1, count do
-      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
-        if line1 ~= line2 or col1 ~= col2 then
-          dv.doc:set_selections(idx, line1, col1)
-        else
-          dv.doc:move_to_cursor(idx, fn)
-        end
-      end
-      dv.doc:merge_cursors()
-    end
-  end,
+   ["h"] = function(count)
+     local dv = core.active_view
+     local motion_fn = get_motion_fn("previous-char")
+     local line, col = dv.doc:get_selection()
+   
+     if not motion_fn then return end
+     for _ = 1, count do
+       if vim.mode == "visual" then
+         dv.doc:select_to(motion_fn, dv)
+       else
+         dv.doc:move_to(motion_fn, dv)
+       end
+     end
+   end,
 
   ["l"] = function(count)
     local dv = core.active_view
@@ -546,6 +565,20 @@ vim.motions = {
     local last_col = #(doc.lines[last_line] or "") + 1
     doc:set_selection(last_line, last_col)
   end,
+  ["i"] = function(obj)
+      if vim.mode == "visual" then
+          if obj == "w" then
+          -- select current word without spaces
+          end
+      end
+  end,
+  ["a"] = function(obj)
+      if vim.mode == "visual" then
+          if obj == "w" then
+          -- select current word without spaces
+          end  
+      end
+  end,
 }
 
 -- normal keymaps
@@ -554,9 +587,11 @@ vim.normal_keys = {
   ["/"] = function() end,
   ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
-
   ["i"] = function()
     vim.set_mode("insert")
+  end,
+  ["v"] = function()
+    vim.set_mode("visual")
   end,
 }
 
