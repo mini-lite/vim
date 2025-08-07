@@ -1,7 +1,13 @@
--- Author: Salah Eddine Ghamri
+-- Author: S.Ghamri
+
+-- Known issues:
+-- column start at 1 which needs consideration when using vim logic
+-- lite does not allow to move cursor to other position without adding new select
+--      - this means that to keep selection you should not move cursor until yanking  
 
 -- Change log-----------------------------------------------------------------
--- TODO: visual select does not start from current char
+-- TODO: have a config for vim
+-- TODO: enhance command line messaging system
 -- TODO: if we lose focus do not react vim is asleep
 -- TODO: track vim commands using a state
 -- TODO: normal mode is working outside doc view
@@ -11,7 +17,15 @@
 -- TODO: create an option if vim global or only to doc views
 -- TODO: let user extend commands
 -- TODO: add disable vim config
+-- TODO: clean collect active view and remove local definitions 
+-- TODO: <NOT THAT EASY> correct cursor on selection problem, compensate everything
+         -- selection region adapted
+         -- make sure yank is correct
+         -- put should be correct too
 
+-- DONE: yanking shows flash of region change color to intense
+-- DONE: visual select does not start from current char
+-- DONE: enable yank and put
 -- DONE: show message notifying the change of state
 -- DONE: give the command line a name
 -- DONE: change caret in normal vim mode
@@ -42,7 +56,7 @@ local vim = {
   command_map = {},
   operators = {},
   motions = {},
-  last_selection = {},
+  last_position = {}, -- save cursor position befor executions
   normal_keys = {},
   visual_keys = {},
 }
@@ -127,12 +141,13 @@ local function handle_input(key)
         reset_state()
         return true
     end
-  elseif vim.mode == "visual" then 
+  elseif vim.mode == "visual"  or vim.mode == "visual-line" then 
     -- visual key 
     if vim.visual_keys and vim.visual_keys[key] then
         vim.visual_keys[key]()
         pending = ""
         reset_state()
+        vim.set_mode("normal") -- after y and p return to normal
         return true
     end
   end
@@ -195,6 +210,17 @@ function core.on_event(type, a, ...)
     elseif type == "keypressed" then
         pressed[a] = true
 
+        -- TODO: set arrow to look like hjkl
+        if a == "down" then
+            vim.motions["j"](state.count)
+            return true
+        end
+
+        if a == "up" then
+            vim.motions["k"](state.count)
+            return true
+        end
+
         if a == "escape" then
             vim.set_mode("normal")
             reset_state()
@@ -230,9 +256,34 @@ function vim.set_mode(m)
         }
         command_line.show_message(message, 0) -- 0 = permanent
     elseif m == "visual" then
+        -- select current position
+        -- coming from normal mode, what user is selecting is c+1
+        local l, c = core.active_view.doc:get_selection() -- c starts from 1
+        vim.last_position = {l=l, c=c} -- record last position to return to
+
+        -- setup caret 
         style.caret_width = common.round(7 * SCALE)
+
+        -- message
         message = {
             style.text, "-- VISUAL --",
+        }
+        command_line.show_message(message, 0) -- 0 = permanent
+    elseif m == "visual-line" then
+        local l, c = core.active_view.doc:get_selection() -- c starts from 1
+        vim.last_position = {l=l, c=c} -- record last position to return to
+
+        -- select line
+        local doc = core.active_view.doc
+        local line_text = doc.lines[l]
+        doc:set_selection(l, 1, l, #line_text)
+        
+        -- setup caret 
+        style.caret_width = common.round(7 * SCALE)
+
+        -- message
+        message = {
+            style.text, "-- VISUAL-LINE --",
         }
         command_line.show_message(message, 0) -- 0 = permanent
     end
@@ -241,11 +292,11 @@ end
 
 -- TODO: we need a real parser
 local vim_ex_commands = {
-  w  = { action = "doc:save", desc = "Save file" },
-  q  = { action = "core:quit", desc = "Quit editor" },
-  qa = { action = "core:quit-all", desc = "Quit all" },
-  wq = { action = "doc:save-and-quit", desc = "Save and quit" },
-  ee = { action = "doc:reload", desc = "reload fresh" }
+  ["w"]   = { action = "doc:save", desc = "Save file" },
+  ["q"]   = { action = "core:quit", desc = "Quit editor" },
+  ["q!"]  = { action = "core:force-quit", desc = "Force quit" },
+  ["qa"]  = { action = "core:quit", desc = "Quit all" },
+  ["e!"]  = { action = "doc:reload", desc = "reload fresh" }
 }
 
 function vim.run_command(cmd)
@@ -303,6 +354,28 @@ function vim.search_word_under_cursor()
   if word then vim.search_forward(word) end
 end
 
+local function yank()
+    local doc = core.active_view.doc
+    local line1, col1, line2, col2 = doc:get_selection()
+    if not (line1 == line2 and col1 == col2) then
+        local text = doc:get_text(line1, col1, line2, col2)
+        vim.registers['"'] = text
+        -- TODO: change region color for sometime
+        local old_selection_style = style.selection
+        style.selection = style.accent
+        core.redraw = true
+        -- Restore after 150ms
+        core.add_thread(function()
+            echo("yanked! %s", text)
+            -- TODO: 0.10 take as config
+            coroutine.yield(0.9)
+            style.selection = old_selection_style
+            core.redraw = true
+            deselect()
+        end)
+    end
+end
+
 -- define operators ---------------------------------------------------------
 vim.operators = {
   -- ["d"]
@@ -312,12 +385,7 @@ vim.operators = {
   -- [">"]
   -- ["c"]
   ["y"] = function(count, motion)
-    local doc = core.active_view.doc
-    -- use motion(count) to get range or lines to yank
-    -- Here simplified: yank current line for demo
-    local line = doc.lines[doc.cursor.line]
-    vim.registers['"'] = line
-    core.log("Yanked line")
+      yank()
   end,
   ["p"] = function(count, motion)
     local doc = core.active_view.doc
@@ -457,49 +525,82 @@ vim.motions = {
    ["h"] = function(count)
      local dv = core.active_view
      local motion_fn = get_motion_fn("previous-char")
-     local line, col = dv.doc:get_selection()
+     local l, c = dv.doc:get_selection()
    
      if not motion_fn then return end
      for _ = 1, count do
        if vim.mode == "visual" then
-         dv.doc:select_to(motion_fn, dv)
+         l, c = dv.doc:position_offset(l, c, -1)
+         dv.doc:set_selection(l, c, vim.last_position.l, vim.last_position.c)
        else
          dv.doc:move_to(motion_fn, dv)
        end
      end
    end,
 
-  ["l"] = function(count)
-    local dv = core.active_view
-    local fn = get_motion_fn("next-char")
-    if not fn then return end
-    for _ = 1, count do
-      for idx, line1, col1, line2, col2 in dv.doc:get_selections(true) do
-        if line1 ~= line2 or col1 ~= col2 then
-          dv.doc:set_selections(idx, line2, col2)
-        else
-          dv.doc:move_to_cursor(idx, fn)
-        end
-      end
-      dv.doc:merge_cursors()
-    end
-  end,
+   ["l"] = function(count)
+     local dv = core.active_view
+     local motion_fn = get_motion_fn("next-char")
+     local l, c = dv.doc:get_selection()
+
+     if not motion_fn then return end
+     for _ = 1, count do
+       if vim.mode == "visual" then
+         l, c = dv.doc:position_offset(l, c, 1)
+         dv.doc:set_selection(l, c, vim.last_position.l, vim.last_position.c)
+       else
+         dv.doc:move_to(motion_fn, dv)
+       end
+     end
+   end,
 
   ["j"] = function(count)
     local dv = core.active_view
     local fn = get_motion_fn("next-line")
+    local fn_end = get_motion_fn("end-of-line")
+    local fn_back = get_motion_fn("previous-char")
+    
     if not fn then return end
-    for _ = 1, count do
-      dv.doc:move_to(fn, dv)
+        for _ = 1, count do
+        if vim.mode == "visual-line" then
+            local old_line, old_col = dv.doc:get_selection()
+            dv.doc:move_to(fn, dv)
+            dv.doc:move_to(fn_end, dv)
+            dv.doc:move_to(fn_back, dv)
+            local nl, c, _, _ = dv.doc:get_selection()
+            if nl == old_line then
+               dv.doc:move_to(fn, dv)
+               nl, c, _, _ = dv.doc:get_selection()
+            end
+            dv.doc:set_selection(nl, c+1, vim.last_position.l, 1)
+        else
+            dv.doc:move_to(fn, dv)
+        end
     end
   end,
 
   ["k"] = function(count)
     local dv = core.active_view
     local fn = get_motion_fn("previous-line")
+    local fn_end = get_motion_fn("start-of-line")
+    --local fn_back = get_motion_fn("next-char")
     if not fn then return end
-    for _ = 1, count do
-      dv.doc:move_to(fn, dv)
+        for _ = 1, count do
+        if vim.mode == "visual-line" then
+            local old_line, old_col = dv.doc:get_selection()
+            dv.doc:move_to(fn, dv)
+            dv.doc:move_to(fn_end, dv)
+            --dv.doc:move_to(fn_back, dv)
+            local nl, c, _, _ = dv.doc:get_selection()
+            if nl == old_line then
+               dv.doc:move_to(fn, dv)
+               nl, c, _, _ = dv.doc:get_selection()
+            end
+            local text = dv.doc.lines[vim.last_position.l]
+            dv.doc:set_selection(nl, c, vim.last_position.l, #text)
+        else
+            dv.doc:move_to(fn, dv)
+        end
     end
   end,
 
@@ -568,14 +669,14 @@ vim.motions = {
   ["i"] = function(obj)
       if vim.mode == "visual" then
           if obj == "w" then
-          -- select current word without spaces
+          -- TODO: select current word without spaces
           end
       end
   end,
   ["a"] = function(obj)
       if vim.mode == "visual" then
           if obj == "w" then
-          -- select current word without spaces
+          -- TODO: select current word without spaces
           end  
       end
   end,
@@ -593,10 +694,31 @@ vim.normal_keys = {
   ["v"] = function()
     vim.set_mode("visual")
   end,
+  ["V"] = function(count, motion)
+      vim.set_mode("visual-line")
+  end,
+  ["p"] = function(count, motion)
+    local doc = core.active_view.doc
+    local text = vim.registers['"'] or ""
+    local line, col = doc:get_selection()
+    doc:insert(line, col, text)
+  end,
+  ["u"] = function()
+    local doc = core.active_view.doc
+    doc:undo()
+    echo("undo")
+  end
 }
 
 -- Visula mode keymap
 vim.visual_keys = {
+  ["y"] = function(count, motion)
+      yank()
+  end,
+
+  ["V"] = function(count, motion)
+      vim.set_mode("visual-line")
+  end,
 }
 
 -- command to launch the command line
