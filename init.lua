@@ -6,6 +6,11 @@
 --      - this means that to keep selection you should not move cursor until yanking  
 
 -- Change log-----------------------------------------------------------------
+-- TODO: correct cursor on selection problem, override all doc view related functions
+         -- selection region adapted
+         -- make sure yank is correct
+         -- put should be correct too
+
 -- TODO: have a config for vim
 -- TODO: enhance command line messaging system
 -- TODO: if we lose focus do not react vim is asleep
@@ -18,10 +23,6 @@
 -- TODO: let user extend commands
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
--- TODO: <NOT THAT EASY> correct cursor on selection problem, compensate everything
-         -- selection region adapted
-         -- make sure yank is correct
-         -- put should be correct too
 
 -- DONE: yanking shows flash of region change color to intense
 -- DONE: visual select does not start from current char
@@ -42,11 +43,68 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local translate = require "core.doc.translate"
 local DocView = require "core.docview"
+local config = require "core.config" 
+local ime = require "core.ime"
 
 local command_line = require "plugins.command-line"
 command_line.set_item_name("status:vim")
 command_line.add_status_item()
 command_line.minimal_status_view = true -- only item will show
+
+-- helper for debug
+local function echo(fmt, ...)
+  local text = string.format(fmt, ...)
+  command_line.show_message({text}, 1)
+end
+
+-- vim docview ----------------------------------------------------
+-- Lite col is 1-based
+
+local function echo_char_under_cursor()
+  local dv = core.active_view
+  if not dv or not dv.doc or not dv.doc.selections then return end
+  local line, col = dv.doc:get_selection()
+  local text = dv.doc.lines[line] or ""
+  local char = text:sub(col, col)  -- Lite XL col is 1-based
+  if char == "" then
+    char = "<EOL>"
+  end
+  echo("%s", char)
+end
+
+function DocView:draw_caret(x, y, line, col)
+  local lh = self:get_line_height()
+  if self.doc.overwrite then
+    local w = self:get_font():get_width(self.doc:get_char(line, col))
+    renderer.draw_rect(x, y + lh, w, style.caret_width * 2, style.caret)
+  else
+    renderer.draw_rect(x, y, style.caret_width, lh, style.caret)
+  end
+end
+
+function DocView:draw_overlay()
+  if core.active_view == self then
+    local minline, maxline = self:get_visible_line_range()
+    -- draw caret if it overlaps this line
+    local T = config.blink_period
+    for _, line1, col1, line2, col2 in self.doc:get_selections() do
+      if line1 >= minline and line1 <= maxline
+      and system.window_has_focus(core.window) then
+        if ime.editing then
+          self:draw_ime_decoration(line1, col1, line2, col2)
+        else
+          if config.disable_blink
+          or (core.blink_timer - core.blink_start) % T < T / 2 then
+            local x, y = self:get_line_screen_position(line1, col1)
+            self:draw_caret(x, y, line1, col1)
+          end
+        end
+      end
+    end
+  end
+end
+
+------------------------------------------------------------------------------
 
 local vim = {
   mode = "normal", -- normal, visual, command, insert
@@ -68,12 +126,6 @@ local state = {
   motion = nil,
   register = nil,
 }
-
--- helper for debug
-local function echo(fmt, ...)
-  local text = string.format(fmt, ...)
-  command_line.show_message({text}, 1)
-end
 
 -- remove selections 
 local function deselect()
@@ -218,6 +270,16 @@ function core.on_event(type, a, ...)
 
         if a == "up" then
             vim.motions["k"](state.count)
+            return true
+        end
+
+        if a == "left" then
+            vim.motions["h"](state.count)
+            return true
+        end
+
+        if a == "right" then
+            vim.motions["l"](state.count)
             return true
         end
 
@@ -522,37 +584,37 @@ local function get_motion_fn(name)
 end
 
 vim.motions = {
-   ["h"] = function(count)
-     local dv = core.active_view
-     local motion_fn = get_motion_fn("previous-char")
-     local l, c = dv.doc:get_selection()
-   
-     if not motion_fn then return end
-     for _ = 1, count do
-       if vim.mode == "visual" then
-         l, c = dv.doc:position_offset(l, c, -1)
-         dv.doc:set_selection(l, c, vim.last_position.l, vim.last_position.c)
-       else
-         dv.doc:move_to(motion_fn, dv)
-       end
-     end
-   end,
+    ["h"] = function(count)
+        local dv = core.active_view
+        local l, c = dv.doc:get_selection()
 
-   ["l"] = function(count)
-     local dv = core.active_view
-     local motion_fn = get_motion_fn("next-char")
-     local l, c = dv.doc:get_selection()
+        if c == 1 then
+            return
+        end
 
-     if not motion_fn then return end
-     for _ = 1, count do
-       if vim.mode == "visual" then
-         l, c = dv.doc:position_offset(l, c, 1)
-         dv.doc:set_selection(l, c, vim.last_position.l, vim.last_position.c)
-       else
-         dv.doc:move_to(motion_fn, dv)
-       end
-     end
-   end,
+        local new_l, new_c = dv.doc:position_offset(l, c, -count) 
+        if vim.mode == "visual" then
+            dv.doc:set_selection(new_l, new_c, vim.last_position.l, vim.last_position.c)
+        else
+            dv.doc:set_selection(new_l, new_c)
+        end
+    end,
+
+    ["l"] = function(count)
+        local dv = core.active_view
+        local l, c = dv.doc:get_selection()
+        local line_text = dv.doc.lines[l] or ""
+        
+        -- stop if already at line end (adjust col bounds as needed)
+        if c >= #line_text - 1 then return end
+        
+        local new_l, new_c = dv.doc:position_offset(l, c, count)
+        if vim.mode == "visual" then
+            dv.doc:set_selection(new_l, new_c, vim.last_position.l, vim.last_position.c)
+        else
+            dv.doc:set_selection(new_l, new_c)
+        end
+    end,
 
   ["j"] = function(count)
     local dv = core.active_view
@@ -688,6 +750,7 @@ vim.normal_keys = {
   ["/"] = function() end,
   ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
+  ["#"] = echo_char_under_cursor,
   ["i"] = function()
     vim.set_mode("insert")
   end,
