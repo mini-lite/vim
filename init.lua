@@ -6,10 +6,16 @@
 --      - this means that to keep selection you should not move cursor until yanking  
 
 -- Change log-----------------------------------------------------------------
+-- TODO: fix the put in the next line no added empty line we must ensure that only one \n exists
+-- TODO: insert next line
+-- TODO: now turn logic into a state machine to turn the emulation realistic
+--       handle_input is the state_machine run logic
+--       rely of delete_to, select_to and move_to otherwise we define our own
 
--- TODO: copy is adding new lines 
+-- TODO: enable only overrides only when vim plugin is loaded
+-- TODO: delete what is selected, we need a mode o-pending where motion for operation
+-- TODO: shift is still selecting in normal disable it
 -- TODO: clean motions code
--- TODO: delete 
 -- TODO: have a config for vim
 -- TODO: enhance command line messaging system
 -- TODO: if we lose focus do not react vim is asleep
@@ -22,7 +28,15 @@
 -- TODO: let user extend commands
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
+-- TODO: use translation to express all motions, operation gets a motion and performs
+--     : select_to, move_to, delete_to
 
+-- DONE: any delete will go to register to be put
+-- DONE: key flow in insert is not smooth, is typing smooth now ???
+-- DONE: vim is overriding arrows in normal mode
+-- DONE: dd delete 
+-- DONE: a bug we need to click ddd to get dd
+-- DONE: copy is adding new lines 
 -- DONE: enhance visual line mode
 -- DONE: correct cursor on selection problem, override all doc view related functions
          -- selection region adapted
@@ -50,6 +64,7 @@ local DocView = require "core.docview"
 local config = require "core.config" 
 local ime = require "core.ime"
 
+-- m: require
 local command_line = require "plugins.command-line"
 command_line.set_item_name("status:vim")
 command_line.add_status_item()
@@ -76,7 +91,7 @@ local function echo_char_under_cursor()
 end
 
 local vim = {
-  mode = "normal", -- normal, visual, command, insert
+  mode = "normal", -- normal, visual, command, insert, delete
   registers = { ['"'] = "" },
   command_buffer = "",
   search_query = "",
@@ -146,13 +161,31 @@ local modifying_keys = {
 local pending = ""
 local prev_dig = false
 
--- input handler
+-- m: input_handler
 local function handle_input(key)
   -- go insert
   if vim.mode == "insert" or vim.mode == "command" then
     return false
   end
 
+  -- if pending gets too long, reset
+  if #pending > 2 then
+    pending = ""
+    reset_state()
+    return true
+  end
+
+  -- accumulate count digits only if no operator pending
+  if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig )) then
+    prev_dig = true
+    state.count = (state.count == 1 and "" or tostring(state.count)) .. key
+    return true
+  end
+
+  -- here numbers already filtered, no number
+  pending = pending .. key
+  prev_dig = false -- other key then digit is pressed
+  
   -- high prio keys
   if vim.mode == "normal" then
     -- normal key like i and v 
@@ -162,6 +195,14 @@ local function handle_input(key)
         reset_state()
         return true
     end
+
+    if vim.normal_keys and vim.normal_keys[pending] then
+        vim.normal_keys[pending]()
+        pending = ""
+        reset_state()
+        return true
+    end
+
   elseif vim.mode == "visual"  or vim.mode == "visual-line" then 
     -- visual key 
     if vim.visual_keys and vim.visual_keys[key] then
@@ -173,39 +214,30 @@ local function handle_input(key)
     end
   end
 
-  -- accumulate count digits only if no operator pending
-  if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig )) then
-    prev_dig = true
-    state.count = (state.count == 1 and "" or tostring(state.count)) .. key
-    return true
-  end
-
-  -- here numbers already filtered
-  pending = pending .. key
-  prev_dig = false
-
   -- try operator first
   if vim.operators[pending] then
     state.operator = vim.operators[pending]
-    pending = ""
-    return true
+    if state.operator.needs_motion then
+        -- go out motion or another key is coming
+        return true
+    else
+        -- execute
+        state.operator.fn(get_count())
+        vim.set_mode("normal") -- after y and p return to normal
+        reset_state()
+        pending = ""
+    end
   end
 
   -- try motion
   if vim.motions[pending] then
     local count = get_count()
-    if state.operator then
-      state.operator(count, vim.motions[pending])
+    if state.operator and state.operator.needs_motion then
+      state.operator.fn(count, vim.motions[pending])
     else
+      -- motion without operator
       vim.motions[pending](count)
     end
-    pending = ""
-    reset_state()
-    return true
-  end
-
-  -- if pending gets too long, reset
-  if #pending > 2 then
     pending = ""
     reset_state()
     return true
@@ -219,7 +251,7 @@ local function on_text(text)
     return handle_input(text)
 end
 
--- on_event override
+-- m: on_event override
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
 
@@ -231,25 +263,26 @@ function core.on_event(type, a, ...)
     elseif type == "keypressed" then
         pressed[a] = true
 
-        -- TODO: set arrow to look like hjkl
-        if a == "down" then
-            vim.motions["j"](state.count)
-            return true
-        end
+        if vim.mode == "visual" or vim.mode == "visual-line" then
+            if a == "down" then
+                vim.motions["j"](state.count)
+                return true
+            end
 
-        if a == "up" then
-            vim.motions["k"](state.count)
-            return true
-        end
+            if a == "up" then
+                vim.motions["k"](state.count)
+                return true
+            end
 
-        if a == "left" then
-            vim.motions["h"](state.count)
-            return true
-        end
+            if a == "left" then
+                vim.motions["h"](state.count)
+                return true
+            end
 
-        if a == "right" then
-            vim.motions["l"](state.count)
-            return true
+            if a == "right" then
+                vim.motions["l"](state.count)
+                return true
+            end
         end
 
         if a == "escape" then
@@ -257,6 +290,7 @@ function core.on_event(type, a, ...)
             reset_state()
             instance_command:cancel_command()
             deselect()
+            pending = ""
             return true --block
         end
 
@@ -285,7 +319,7 @@ local function return_to_line()
   end
 end
 
--- mode switch
+-- m: mode_switch
 function vim.set_mode(m)
     local message = ""
     if m == "normal" then
@@ -414,24 +448,31 @@ local function get_text(line1, col1, line2, col2)
     out[#out+1] = t:sub(s, e)
   end
 
-  return table.concat(out, "\n")
+  return table.concat(out, "")
 end
 
-local function yank()
+local function yank(l1, c1, l2, c2)
     local doc = core.active_view.doc
-    local line1, col1, line2, col2 = doc:get_selection()
-    if not (line1 == line2 and col1 == col2) then
-        -- TODO: get text is taking less text
-        local text = get_text(line1, col1, line2, col2)
-        vim.registers['"'] = text
+    if not (l1 and c1 and l2 and c2) then
+        l1, c1, l2, c2 = doc:get_selection()
+    end
+    if not (l1 == l2 and c1 == c2) then
+        local text = get_text(l1, c1, l2, c2)
+
+        local yank_type = "char"
+        if vim.mode == "normal" or vim.mode == "visual-line" then
+            yank_type = "line"
+        elseif vim.mode == "visual" then
+            yank_type = "char"
+        end
+
+        vim.registers['"'] = { text = text, type = yank_type }
+
         local old_selection_style = style.selection
         style.selection = style.accent
         core.redraw = true
-        -- Restore after 150ms
         core.add_thread(function()
-            echo("%s : %s %s %s %s ", text, line1, col1, line2, col2)
-            -- echo("yanked! %s", text)
-            -- TODO: 0.10 take as config
+            echo("yanked! %s", text)
             coroutine.yield(0.9)
             style.selection = old_selection_style
             core.redraw = true
@@ -440,22 +481,80 @@ local function yank()
     end
 end
 
--- define operators ---------------------------------------------------------
+local function put(direction, count)
+    count = count or 1
+    local doc = core.active_view.doc
+    local l, c = doc:get_selection()
+    local reg = vim.registers['"'] or { text = "", type = "char" }
+    local text = reg.text or ""
+    local yank_type = reg.type or "char"
+
+    direction = (direction == "up" and "up") or "down"
+
+    local lines = {}
+    for line in text:gmatch("([^\n]*)\n?") do
+        table.insert(lines, line)
+    end
+
+    for _ = 1, count do
+        if yank_type == "line" then
+            local insert_line = direction == "down" and (l + 1) or l
+            if direction == "down" then
+                for i = #lines, 1, -1 do
+                    local line_text = lines[i]
+                    if not line_text:match("\n$") then
+                        line_text = line_text .. "\n"
+                    end
+                    doc:insert(insert_line, 1, line_text)
+                end
+            else
+                for i, line_text in ipairs(lines) do
+                    if not line_text:match("\n$") then
+                        line_text = line_text .. "\n"
+                    end
+                    doc:insert(insert_line + i - 1, 1, line_text)
+                end
+            end
+        else
+            doc:insert(l, c, text)
+            l, c = doc:position_offset(l, c, #text)
+        end
+        doc:set_selection(l, c, l, c)
+    end
+end
+
+-- m: operators 
 vim.operators = {
-  -- ["d"]
+    ["d"] = {
+    needs_motion = true,
+    fn = function(count, motion)
+            local dv = core.active_view
+            doc:delete_to(motion, dv)
+         end
+    },
   -- ["gu"]
   -- ["gU"]
   -- ["<"]
   -- [">"]
   -- ["c"]
-  ["y"] = function(count, motion)
-      yank()
-  end,
-  ["p"] = function(count, motion)
-    local doc = core.active_view.doc
-    local text = vim.registers['"'] or ""
-    doc:insert(doc.cursor, text .. "\n")
-  end,
+    ["y"] = {
+    needs_motion = false,
+    fn = function(count)
+        yank()
+        end
+    },
+    ["p"] = {
+    needs_motion = false,
+    fn = function(count)
+        put("down")
+    end
+    },
+    ["P"] = {
+    needs_motion = false,
+    fn = function(count)
+        put("up")
+    end
+    },
 }
 
 -- define motions ----------------------------------------------------
@@ -492,6 +591,7 @@ do
   end
 end
 
+-- m: translations
 local translations = {
   ["previous-char"]        = translate,
   ["next-char"]            = translate,
@@ -619,6 +719,7 @@ local function get_motion_fn(name)
   return nil
 end
 
+-- m: motions
 vim.motions = {
     ["h"] = function(count)
         local dv = core.active_view
@@ -801,7 +902,7 @@ vim.motions = {
   end,
 }
 
--- normal keymaps
+-- m: normal_keymaps
 vim.normal_keys = {
   [":"] = function() end,
   ["/"] = function() end,
@@ -817,25 +918,28 @@ vim.normal_keys = {
   ["V"] = function(count, motion)
       vim.set_mode("visual-line")
   end,
-  ["p"] = function(count, motion)
-    local doc = core.active_view.doc
-    local text = vim.registers['"'] or ""
-    local line, col = doc:get_selection()
-    doc:insert(line, col, text)
-  end,
   ["u"] = function()
     local doc = core.active_view.doc
     doc:undo()
     echo("undo")
-  end
+  end,
+  ["dd"] = function ()
+    local dv = core.active_view
+    if not dv or not dv.doc then return end
+    local doc = dv.doc
+    local line = doc:get_selection()
+    local total_lines = #doc.lines
+    yank(line, 1, line+1, 0)
+    if line >= total_lines then
+        doc:remove(line, 1, line, #doc.lines[line])
+    else
+        doc:remove(line, 1, line + 1, 1)
+    end
+ end,
 }
 
 -- Visula mode keymap
 vim.visual_keys = {
-  ["y"] = function(count, motion)
-      yank()
-  end,
-
   ["V"] = function(count, motion)
       vim.set_mode("visual-line")
   end,
@@ -858,16 +962,7 @@ vim.normal_keys[":"] = function()
   }
 end
 
--- TODO: enable only when vim plugin is loaded
--- vim docview ----------------------------------------------------
--- Implecations of Lite col is 1-based
--- in normal mode all is correct, character under cursor is correct.
--- in insert mode caret is correct and the behavior is vim like
--- to problem is selection mode does not go till second point (l1, c1, l2, c2)
--- rather stops at l2 - 1 and c2 - 1
---   - correct the text in yank text is taken using local function
---   - monkey patch to draw_line_body to expand selection region
-
+-- m: vim_docview ----------------------------------------------------
 function DocView:draw_line_body(line, x, y)
   -- draw highlight if any selection ends on this line (unchanged)
   local draw_highlight = false
