@@ -6,11 +6,10 @@
 --      - this means that to keep selection you should not move cursor until yanking  
 
 -- Change log-----------------------------------------------------------------
--- TODO: correct cursor on selection problem, override all doc view related functions
-         -- selection region adapted
-         -- make sure yank is correct
-         -- put should be correct too
 
+-- TODO: copy is adding new lines 
+-- TODO: clean motions code
+-- TODO: delete 
 -- TODO: have a config for vim
 -- TODO: enhance command line messaging system
 -- TODO: if we lose focus do not react vim is asleep
@@ -24,6 +23,11 @@
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
 
+-- DONE: enhance visual line mode
+-- DONE: correct cursor on selection problem, override all doc view related functions
+         -- selection region adapted
+         -- make sure yank is correct
+         -- put should be correct too
 -- DONE: yanking shows flash of region change color to intense
 -- DONE: visual select does not start from current char
 -- DONE: enable yank and put
@@ -57,8 +61,7 @@ local function echo(fmt, ...)
   command_line.show_message({text}, 1)
 end
 
--- vim docview ----------------------------------------------------
--- Lite col is 1-based
+local caret_offset = 0
 
 local function echo_char_under_cursor()
   local dv = core.active_view
@@ -71,40 +74,6 @@ local function echo_char_under_cursor()
   end
   echo("%s", char)
 end
-
-function DocView:draw_caret(x, y, line, col)
-  local lh = self:get_line_height()
-  if self.doc.overwrite then
-    local w = self:get_font():get_width(self.doc:get_char(line, col))
-    renderer.draw_rect(x, y + lh, w, style.caret_width * 2, style.caret)
-  else
-    renderer.draw_rect(x, y, style.caret_width, lh, style.caret)
-  end
-end
-
-function DocView:draw_overlay()
-  if core.active_view == self then
-    local minline, maxline = self:get_visible_line_range()
-    -- draw caret if it overlaps this line
-    local T = config.blink_period
-    for _, line1, col1, line2, col2 in self.doc:get_selections() do
-      if line1 >= minline and line1 <= maxline
-      and system.window_has_focus(core.window) then
-        if ime.editing then
-          self:draw_ime_decoration(line1, col1, line2, col2)
-        else
-          if config.disable_blink
-          or (core.blink_timer - core.blink_start) % T < T / 2 then
-            local x, y = self:get_line_screen_position(line1, col1)
-            self:draw_caret(x, y, line1, col1)
-          end
-        end
-      end
-    end
-  end
-end
-
-------------------------------------------------------------------------------
 
 local vim = {
   mode = "normal", -- normal, visual, command, insert
@@ -305,10 +274,22 @@ function core.on_event(type, a, ...)
   return original_on_event(type, a, ...)
 end
 
+local function return_to_line()
+  local dv = core.active_view
+  if not (dv and dv.doc) then return end
+
+  local l, c = dv.doc:get_selection()
+  local line_text = dv.doc.lines[l] or ""
+  if c > #line_text - 1 then
+    dv.doc:set_selection(l, #line_text - 1, l, #line_text - 1)
+  end
+end
+
 -- mode switch
 function vim.set_mode(m)
     local message = ""
     if m == "normal" then
+        return_to_line()
         style.caret_width = common.round(7 * SCALE)
         command_line.show_message({}, 0)     -- 0 = permanent
     elseif m == "insert" then
@@ -333,12 +314,12 @@ function vim.set_mode(m)
         command_line.show_message(message, 0) -- 0 = permanent
     elseif m == "visual-line" then
         local l, c = core.active_view.doc:get_selection() -- c starts from 1
-        vim.last_position = {l=l, c=c} -- record last position to return to
+        local doc = core.active_view.doc 
+        vim.last_position = {l=l, c=c, ll=#doc.lines[l]} -- record last position to return to
 
         -- select line
-        local doc = core.active_view.doc
-        local line_text = doc.lines[l]
-        doc:set_selection(l, 1, l, #line_text)
+        -- put selection at the end of line
+        doc:set_selection(l, #doc.lines[l], l, 1)
         
         -- setup caret 
         style.caret_width = common.round(7 * SCALE)
@@ -416,19 +397,40 @@ function vim.search_word_under_cursor()
   if word then vim.search_forward(word) end
 end
 
+local function get_text(line1, col1, line2, col2)
+  -- line and columns here are 0 col based
+  local doc = core.active_view and core.active_view.doc
+  if not (doc and doc.lines) then return nil end
+
+  if line1 > line2 or (line1 == line2 and col1 > col2) then
+    line1, col1, line2, col2 = line2, col2, line1, col1
+  end
+
+  local out = {}
+  for line = line1, line2 do
+    local t = doc.lines[line] or ""
+    local s = (line == line1) and col1 or 1
+    local e = (line == line2) and col2 or #t
+    out[#out+1] = t:sub(s, e)
+  end
+
+  return table.concat(out, "\n")
+end
+
 local function yank()
     local doc = core.active_view.doc
     local line1, col1, line2, col2 = doc:get_selection()
     if not (line1 == line2 and col1 == col2) then
-        local text = doc:get_text(line1, col1, line2, col2)
+        -- TODO: get text is taking less text
+        local text = get_text(line1, col1, line2, col2)
         vim.registers['"'] = text
-        -- TODO: change region color for sometime
         local old_selection_style = style.selection
         style.selection = style.accent
         core.redraw = true
         -- Restore after 150ms
         core.add_thread(function()
-            echo("yanked! %s", text)
+            echo("%s : %s %s %s %s ", text, line1, col1, line2, col2)
+            -- echo("yanked! %s", text)
             -- TODO: 0.10 take as config
             coroutine.yield(0.9)
             style.selection = old_selection_style
@@ -565,6 +567,40 @@ local translations = {
   ["end-of-line"]          = translate,
   ["start-of-doc"]         = translate,
   ["end-of-doc"]           = translate,
+  ["select-down"] = function(doc, line, col)
+    -- go to the end
+    if line >= #doc.lines then
+      return line, col
+    end
+    local next_line = line + 1
+    local text = doc.lines[next_line] or ""
+    return next_line, #text
+  end,
+  ["select-up"] = function(doc, line, col)
+    -- go to the start
+    if line <= 1 then
+        return line, col 
+    end
+    local prev_line = line - 1
+    return prev_line, 1 
+  end,
+  ["deselect-down"] = function(doc, line, col)
+    -- go to the end
+    if line >= #doc.lines then
+      return line, col
+    end
+    local next_line = line + 1
+    return next_line, 1
+  end,
+  ["deselect-up"] = function(doc, line, col)
+  -- go to the start
+  if line <= 1 then
+      return line, col 
+  end
+  local prev_line = line - 1
+  local text = doc.lines[prev_line] or ""
+  return prev_line, #text 
+  end,
   ["next-line"]            = DocView.translate,
   ["previous-line"]        = DocView.translate,
   ["next-page"]            = DocView.translate,
@@ -587,6 +623,7 @@ vim.motions = {
     ["h"] = function(count)
         local dv = core.active_view
         local l, c = dv.doc:get_selection()
+        local ll, cc = 0
 
         if c == 1 then
             return
@@ -604,9 +641,14 @@ vim.motions = {
         local dv = core.active_view
         local l, c = dv.doc:get_selection()
         local line_text = dv.doc.lines[l] or ""
+        caret_offset = -1
         
         -- stop if already at line end (adjust col bounds as needed)
-        if c >= #line_text - 1 then return end
+        if vim.mode == "insert" then
+            if c >= #line_text then return end
+        else
+            if c >= #line_text - 1 then return end
+        end
         
         local new_l, new_c = dv.doc:position_offset(l, c, count)
         if vim.mode == "visual" then
@@ -619,62 +661,77 @@ vim.motions = {
   ["j"] = function(count)
     local dv = core.active_view
     local fn = get_motion_fn("next-line")
-    local fn_end = get_motion_fn("end-of-line")
-    local fn_back = get_motion_fn("previous-char")
+    local l, c, l2, c2 = dv.doc:get_selection() 
+    local swap = false
+
+    local l_end = l + 1
+    local c_end = #dv.doc.lines[l_end]
+
+    if vim.mode == "visual-line" then
+    if l > l2 then
+        swap = true
+    elseif l < l2 then
+        swap = false
+        c_end = 1
+    elseif l == l2 then
+       dv.doc:set_selection(vim.last_position.l, vim.last_position.ll, vim.last_position.l, 1, swap)
+    end
+    end
+
+    local _, _, l_start, c_start = dv.doc:get_selection() 
     
     if not fn then return end
         for _ = 1, count do
-        if vim.mode == "visual-line" then
-            local old_line, old_col = dv.doc:get_selection()
-            dv.doc:move_to(fn, dv)
-            dv.doc:move_to(fn_end, dv)
-            dv.doc:move_to(fn_back, dv)
-            local nl, c, _, _ = dv.doc:get_selection()
-            if nl == old_line then
-               dv.doc:move_to(fn, dv)
-               nl, c, _, _ = dv.doc:get_selection()
+            if vim.mode == "visual-line" then
+                dv.doc:set_selection(l_end, c_end, l_start , c_start)
+            else
+                dv.doc:move_to(fn, dv)
             end
-            dv.doc:set_selection(nl, c+1, vim.last_position.l, 1)
-        else
-            dv.doc:move_to(fn, dv)
         end
-    end
-  end,
+    end,
 
   ["k"] = function(count)
+    -- up
     local dv = core.active_view
     local fn = get_motion_fn("previous-line")
-    local fn_end = get_motion_fn("start-of-line")
-    --local fn_back = get_motion_fn("next-char")
+    local l, c, l2, c2 = dv.doc:get_selection() 
+    local swap = true
+
+
+    local l_end = l - 1
+    local c_end = 1
+
+    if vim.mode == "visual-line" then
+    if l < l2 then
+        swap = false
+    elseif l > l2 then
+        c_end = #dv.doc.lines[l_end]
+        swap = true
+    elseif l == l2 then
+       dv.doc:set_selection(vim.last_position.l, vim.last_position.ll, vim.last_position.l, 1, swap)
+    end
+    end
+
+    local _, _, l_start, c_start = dv.doc:get_selection() 
+    
     if not fn then return end
         for _ = 1, count do
-        if vim.mode == "visual-line" then
-            local old_line, old_col = dv.doc:get_selection()
-            dv.doc:move_to(fn, dv)
-            dv.doc:move_to(fn_end, dv)
-            --dv.doc:move_to(fn_back, dv)
-            local nl, c, _, _ = dv.doc:get_selection()
-            if nl == old_line then
-               dv.doc:move_to(fn, dv)
-               nl, c, _, _ = dv.doc:get_selection()
+            if vim.mode == "visual-line" then
+                echo("%s", c_start)
+                dv.doc:set_selection(l_end, c_end, l_start , c_start)
+            else
+                dv.doc:move_to(fn, dv)
             end
-            local text = dv.doc.lines[vim.last_position.l]
-            dv.doc:set_selection(nl, c, vim.last_position.l, #text)
-        else
-            dv.doc:move_to(fn, dv)
         end
-    end
-  end,
-
+    end,
   ["w"] = function(count)
-    local dv = core.active_view
-    count = count or 1
-    local next_word_start = get_motion_fn("next-word-start")
-    for _ = 1, count do
-        dv.doc:move_to(next_word_start, dv)
-    end
-  end,
-
+        local dv = core.active_view
+        count = count or 1
+        local next_word_start = get_motion_fn("next-word-start")
+        for _ = 1, count do
+            dv.doc:move_to(next_word_start, dv)
+        end
+    end,
   ["b"] = function(count)
     local dv = core.active_view
     local previous_word_start = get_motion_fn("previous-word-start")
@@ -801,6 +858,69 @@ vim.normal_keys[":"] = function()
   }
 end
 
+-- TODO: enable only when vim plugin is loaded
+-- vim docview ----------------------------------------------------
+-- Implecations of Lite col is 1-based
+-- in normal mode all is correct, character under cursor is correct.
+-- in insert mode caret is correct and the behavior is vim like
+-- to problem is selection mode does not go till second point (l1, c1, l2, c2)
+-- rather stops at l2 - 1 and c2 - 1
+--   - correct the text in yank text is taken using local function
+--   - monkey patch to draw_line_body to expand selection region
+
+function DocView:draw_line_body(line, x, y)
+  -- draw highlight if any selection ends on this line (unchanged)
+  local draw_highlight = false
+  local hcl = config.highlight_current_line
+  if hcl ~= false then
+    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+      if line1 == line then
+        if hcl == "no_selection" then
+          if (line1 ~= line2) or (col1 ~= col2) then
+            draw_highlight = false
+            break
+          end
+        end
+        draw_highlight = true
+        break
+      end
+    end
+  end
+  if draw_highlight and core.active_view == self then
+    self:draw_line_highlight(x + self.scroll.x, y)
+  end
+
+  -- draw selection if it overlaps this line (end made inclusive)
+  local lh = self:get_line_height()
+  for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
+    if line >= line1 and line <= line2 then
+      local text = self.doc.lines[line] or ""
+      local s = (line == line1) and col1 or 1
+      local e = (line == line2) and col2 or (#text + 1)
+
+      -- expand visual end by +1 for non-empty selections on the final line
+      local draw_e = e
+      if not (line1 == line2 and col1 == col2) and line == line2 then
+        draw_e = math.min(e + 1, #text + 1)
+      end
+
+      local x1 = x + self:get_col_x_offset(line, s)
+      local x2 = x + self:get_col_x_offset(line, draw_e)
+      if x1 ~= x2 then
+        local selection_color = style.selection
+        -- Only call is_search_selection if the method exists
+        if type(self.doc.is_search_selection) == "function" and self.doc:is_search_selection(line1, s, line, e) then
+          selection_color = style.search_selection or style.caret
+        end
+        renderer.draw_rect(x1, y, x2 - x1, lh, selection_color)
+      end
+    end
+  end
+
+  return self:draw_line_text(line, x, y)
+end
+
+------------------------------------------------------------------------------
 -- Init
 vim.set_mode("normal")
 
