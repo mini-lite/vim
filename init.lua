@@ -6,12 +6,12 @@
 --      - this means that to keep selection you should not move cursor until yanking  
 
 -- Change log-----------------------------------------------------------------
--- TODO: fix the put in the next line no added empty line we must ensure that only one \n exists
--- TODO: insert next line
+
+-- ONGOING: insert next line o and O
+
 -- TODO: now turn logic into a state machine to turn the emulation realistic
 --       handle_input is the state_machine run logic
 --       rely of delete_to, select_to and move_to otherwise we define our own
-
 -- TODO: enable only overrides only when vim plugin is loaded
 -- TODO: delete what is selected, we need a mode o-pending where motion for operation
 -- TODO: shift is still selecting in normal disable it
@@ -31,6 +31,7 @@
 -- TODO: use translation to express all motions, operation gets a motion and performs
 --     : select_to, move_to, delete_to
 
+-- DONE: fix the put in the next line no added empty line we must ensure that only one \n exists
 -- DONE: any delete will go to register to be put
 -- DONE: key flow in insert is not smooth, is typing smooth now ???
 -- DONE: vim is overriding arrows in normal mode
@@ -451,6 +452,7 @@ local function get_text(line1, col1, line2, col2)
   return table.concat(out, "")
 end
 
+-- m: yank()
 local function yank(l1, c1, l2, c2)
     local doc = core.active_view.doc
     if not (l1 and c1 and l2 and c2) then
@@ -459,6 +461,7 @@ local function yank(l1, c1, l2, c2)
     if not (l1 == l2 and c1 == c2) then
         local text = get_text(l1, c1, l2, c2)
 
+        -- TODO: find a better way then using modes here
         local yank_type = "char"
         if vim.mode == "normal" or vim.mode == "visual-line" then
             yank_type = "line"
@@ -469,10 +472,12 @@ local function yank(l1, c1, l2, c2)
         vim.registers['"'] = { text = text, type = yank_type }
 
         local old_selection_style = style.selection
+
+        -- highlight yanked 
         style.selection = style.accent
         core.redraw = true
         core.add_thread(function()
-            echo("yanked! %s", text)
+            echo("yanked! %s", text) -- debug
             coroutine.yield(0.9)
             style.selection = old_selection_style
             core.redraw = true
@@ -481,6 +486,7 @@ local function yank(l1, c1, l2, c2)
     end
 end
 
+-- m: put()
 local function put(direction, count)
     count = count or 1
     local doc = core.active_view.doc
@@ -489,10 +495,12 @@ local function put(direction, count)
     local text = reg.text or ""
     local yank_type = reg.type or "char"
 
-    direction = (direction == "up" and "up") or "down"
+    if direction ~= "up" then
+        direction = "down"
+    end
 
     local lines = {}
-    for line in text:gmatch("([^\n]*)\n?") do
+    for line in text:gmatch("([^\n]+)") do
         table.insert(lines, line)
     end
 
@@ -922,6 +930,23 @@ vim.normal_keys = {
     local doc = core.active_view.doc
     doc:undo()
     echo("undo")
+  end,
+  ["o"] = function()
+      local dv = core.active_view
+      if not dv or not dv.doc then return end
+      local doc = dv.doc
+      local l = doc:get_selection()
+      doc:set_selection(l+1, 1)
+      vim.set_mode("insert")
+      doc:insert(l+1, 1, "\n")
+  end,
+  ["O"] = function()
+      local dv = core.active_view
+      if not dv or not dv.doc then return end
+      local doc = dv.doc
+      local l = doc:get_selection()
+      vim.set_mode("insert")
+      doc:insert(l, 1, "\n")
   end,
   ["dd"] = function ()
     local dv = core.active_view
