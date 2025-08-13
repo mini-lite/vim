@@ -7,6 +7,8 @@
 
 -- Change log-----------------------------------------------------------------
 
+-- TODO: put can handle clipboard
+
 -- ONGOING: motions can be function that accept text objects
 -- ONGOING: now turn logic into a state machine to turn the emulation realistic
 --          handle_input is the state_machine run logic
@@ -16,11 +18,10 @@
 -- TODO: enable only overrides only when vim plugin is loaded
 -- TODO: delete what is selected, we need a mode o-pending where motion for operation
 -- TODO: shift is still selecting in normal disable it
--- TODO: clean motions code
--- TODO: have a config for vim
--- TODO: enhance command line messaging system
+-- TODO: refactor to simplify motions code
+-- TODO: collect configs for vim plugin
+-- TODO: enhance command line messaging system with FiFo with time 
 -- TODO: if we lose focus do not react vim is asleep
--- TODO: track vim commands using a state
 -- TODO: normal mode is working outside doc view
 -- TODO: start adding important navigations
 -- TODO: we need to set space as leader or adapt if user want space as leader
@@ -28,9 +29,9 @@
 -- TODO: let user extend commands
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
--- TODO: use translation to express all motions, operation gets a motion and performs
---     : select, move_to, delete
 
+-- DONE: deleting a line does not leave an empty line behind
+-- DONE: track vim commands using a state
 -- DONE: puting also flashes and yanking flashes in all situations
 -- DONE: p and P insert even when empty. when adding a new line go selection to beginning of that line
 -- DONE: insert next line o and O
@@ -479,8 +480,8 @@ local function flash(l1, c1, l2, c2, color, time, doc)
 end
 
 -- m: yank() works with get_selection
-local function yank(l1, c1, l2, c2)
-    local flash_time = 0.2
+local function yank(l1, c1, l2, c2, flash_time)
+    local flash_time = flash_time or 0
     local flash_color = style.accent
     local doc = core.active_view.doc
     if not (l1 and c1 and l2 and c2) then
@@ -515,8 +516,15 @@ local function delete(l1, c1, l2, c2)
     if l1 > l2 or (l1 == l2 and c1 > c2) then
       l1, c1, l2, c2 = l2, c2, l1, c1
     end
+
+    local text = doc.lines[l2]
+    if c2 == #text then -- we are at \n then next line
+        l2 = l2 + 1
+        c2 = 1
+    else
+        c2 = c2 + 1 -- doc:remove uses 1-col
+    end
     yank(l1, c1, l2, c2)
-    c2 = c2 + 1 -- doc:remove uses 1-col
   elseif l1 > l2 or (l1 == l2 and c1 > c2) then
     l1, c1, l2, c2 = l2, c2, l1, c1
     yank(l1, c1, l2, c2)
@@ -612,7 +620,7 @@ vim.operators = {
            -- l1, c1, 12, c2 = motion(count)
            -- yank(l1, c1, l2, c2)
         else
-            yank(count)
+           yank(nil, nil, nil, nil, 0.4) 
         end
     end
     },
@@ -797,6 +805,9 @@ local function get_motion_fn(name)
 end
 
 -- m: motions
+-- a motion will result in selections points if executed l1, c1, l2, c2
+-- a motion can take a text object, needs object or not
+-- a motion by its own can execute in normal
 vim.motions = {
     ["h"] = function(count)
         local dv = core.active_view
