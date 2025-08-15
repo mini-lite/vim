@@ -1,13 +1,10 @@
 -- Author: S.Ghamri
 
--- Known issues:
--- column start at 1 which needs consideration when using vim logic
--- lite does not allow to move cursor to other position without adding new select
---      - this means that to keep selection you should not move cursor until yanking  
-
 -- Change log-----------------------------------------------------------------
 
--- TODO: normalize select, delete, put, move. they must use same coordinates
+-- TODO: put adds one character
+-- TODO: cursor hides after putting
+-- TODO: normalize select, delete, put, move. they must use same coordinates, same logic
 
 -- ONGOING: now turn logic into a state machine to turn the emulation realistic
 --          handle_input is the state_machine run logic
@@ -30,6 +27,7 @@
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
 
+-- DONE: correct visual j k behavior
 -- DONE: motions can be function that accept text objects
 -- DONE: deleting a line does not leave an empty line behind
 -- DONE: track vim commands using a state
@@ -74,6 +72,8 @@ local ime = require "core.ime"
 local resolve_motion
 local get_region
 local select_operator
+local line_select_operator
+local block_select_operator
 local move_operator
 
 -- m: require
@@ -119,8 +119,11 @@ local vim = {
   operators = {},
   motions = {},
   last_position = {}, -- save cursor position befor executions
+  max_col = 0;
   normal_keys = {},
   visual_keys = {},
+  remap_keys = {},
+  dir = 0,
 }
 
 -- state to track commands
@@ -180,6 +183,14 @@ local modifying_keys = {
   ["delete"] = true,
   ["insert"] = true,
   ["space"] = true
+}
+
+-- remaps
+vim.remap_keys = {
+    ["down"]  = "j",
+    ["up"]    = "k",
+    ["left"]  = "h",
+    ["right"] = "l",
 }
 
 -- accumulate keys
@@ -245,9 +256,9 @@ local function handle_input(key)
 
   -- 1. operator go o-pending waiting for motion
   -- operator works on region "l1, c1, l2, c2"
-  if vim.operators[pending] then
+  if vim.operators[pending] and vim.mode ~= "o-pending" then
     state.operator = vim.operators[pending]
-    if vim.mode ~= "normal" then
+    if vim.mode == "visual" or vim.mode == "visual-line" then
       state.operator() -- execute operator
       reset_state()
     else -- in normal operators need motion
@@ -255,6 +266,14 @@ local function handle_input(key)
     end
     pending = ""
     return true
+  end
+
+  if vim.mode == "visual" then
+     state.operator = select_operator
+  end
+
+  if vim.mode == "visual-line" then
+     state.operator = line_select_operator
   end
 
   -- 2. simple motions like h, j, k, l, w, e, etc.
@@ -272,16 +291,13 @@ local function handle_input(key)
   if #pending == 2 and (pending:sub(1,1) == "i" or pending:sub(1,1) == "a") then
     state.motion_prefix = pending:sub(1,1) -- 'i' or 'a'
     state.text_object = pending:sub(2,2)
-
-    if vim.mode == "visual" then
-       state.operator = select_operator
-    end
-    
+ 
     if state.motion_prefix and state.text_object then
       local count = get_count()
       state.operator(count, nil, state.motion_prefix, state.text_object)
       pending = ""
       reset_state()
+      vim.mode = "normal"
       return true
     end
   end
@@ -303,24 +319,9 @@ function core.on_event(type, a, ...)
     elseif type == "keypressed" then
         pressed[a] = true
 
-        if vim.mode == "visual" or vim.mode == "visual-line" then
-            if a == "down" then
-                vim.motions["j"](state.count)
-                return true
-            end
-
-            if a == "up" then
-                vim.motions["k"](state.count)
-                return true
-            end
-
-            if a == "left" then
-                vim.motions["h"](state.count)
-                return true
-            end
-
-            if a == "right" then
-                vim.motions["l"](state.count)
+        -- some key remaps to input
+        if vim.remap_keys[a] and vim.mode ~= "normal" then
+            if handle_input(vim.remap_keys[a]) then
                 return true
             end
         end
@@ -483,23 +484,6 @@ local function flash(l1, c1, l2, c2, color, time, doc)
     end)
 end
 
--- default visual operator
-select_operator = function(count, motion, motion_prefix, text_object)
-           local doc = get_doc()
-           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-           doc:set_selection(l1, c1, l2, c2)
-end
-
--- default normal operator
-move_operator = function(count, motion, motion_prefix, text_object)
-           local doc = get_doc()
-           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-           if l1 == l2 and c1 == c2 then
-              -- move to l, c , l1 = l2 and c1 = c2
-              doc:set_selection(l1, c1, l2, c2)
-           end
-end
-
 -- m: yank() works with get_selection
 local function yank(l1, c1, l2, c2, flash_time)
     local flash_time = flash_time or 0
@@ -552,6 +536,7 @@ local function delete(l1, c1, l2, c2)
     yank(l1, c1, l2, c2)
   end
   doc:remove(l1, c1, l2, c2)
+  vim.set_mode("normal") -- after y and p return to normal
 end
 
 -- m: put()
@@ -611,29 +596,100 @@ local function put(direction, count)
 end
 
 -- respect a format for region
-local function normalize_region(l1, c1, l2, c2)
-    if not (l1 and c1 and l2 and c2) then return end
-    if l1 > l2 or (l1 == l2 and c1 > c2) then
-        l1, c1, l2, c2 = l2, c2, l1, c1
-    end
-    return l1, c1, l2, c2 
-end
+--local function normalize_region(l1, c1, l2, c2)
+--    if not (l1 and c1 and l2 and c2) then return end
+--    if l1 > l2 or (l1 == l2 and c1 > c2) then
+--        l1, c1, l2, c2 = l2, c2, l1, c1
+--    end
+--    return l1, c1, l2, c2 
+--end
 
 resolve_motion = function(motion, motion_prefix, text_object)
   local doc = get_doc()
-  local l1, c1 = doc:get_selection() 
+  local l2, c2, l1, c1 = doc:get_selection() 
   
+  -- no motion
   if motion_prefix and text_object then
-      return get_region(l1, c1, motion_prefix, text_object)
+      return get_region(l2, c2, motion_prefix, text_object)
   end
 
+  -- motion
   if motion and type(motion) == "function" then
-      local l1, c1, l2, c2 = motion()
-      return normalize_region(l1, c1, l2, c2)
+      -- new l, new c, old l, old c
+      -- TODO: motion calls another get_selection()
+      return motion(doc, l2, c2)
   end
 end
 
+
 -- m: operators 
+-- default visual operator
+-- TODO: add them to vim operators
+line_select_operator = function(count, motion, motion_prefix, text_object)
+    local doc = get_doc()
+
+    local endl, endc, startl, startc = doc:get_selection() -- line already selected
+    local endl, endc, _, _ = resolve_motion(motion, motion_prefix, text_object)
+
+    if not (endl and endc and startl and startc ) then
+        return
+    end
+    
+    local text = doc.lines[endl]
+
+    if startl == endl then
+        if vim.dir > 0 then
+            startc = #text
+            endc = 1
+        elseif vim.dir < 0 then
+            startc = 1
+            endc = #text 
+        else
+            -- pass
+        end
+    elseif startl > endl then
+        local text = doc.lines[startl]
+        startc = #text
+        endc = 1
+    elseif startl < endl then
+        local text = doc.lines[endl]
+        startc = 1
+        endc = #text
+    end
+
+    doc:set_selection(endl, endc, startl, startc)
+end
+
+select_operator = function(count, motion, motion_prefix, text_object)
+    local doc = get_doc()
+    local endl, endc, startl, startc = doc:get_selection()
+    local l, c
+
+    -- if return equl pair then just movement
+    endl, endc, l, c = resolve_motion(motion, motion_prefix, text_object)
+
+    if not (endl == l and endc == c) then
+        startl = l
+        startc = c
+    end
+    
+    if not (endl and endc and startl and startc) then
+        return
+    end
+
+    doc:set_selection(endl, endc, startl, startc)
+end
+
+-- default normal operator
+move_operator = function(count, motion, motion_prefix, text_object)
+           local doc = get_doc()
+           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+           if not (l1 and c1 and l2 and c2) then
+               return
+           end
+           doc:set_selection(l1, c1, l1, c1)
+end
+
 -- operator by definition needs a motion (area to work on)
 vim.operators = {
     ["d"] = function(count, motion, motion_prefix, text_object)
@@ -826,90 +882,44 @@ end
 
 -- m: motions
 vim.motions = {
-    ["h"] = function()
-        local doc = get_doc()
-        local l, c, l2, c2 = doc:get_selection()
-        local ll, cc = 0
-
+    ["h"] = function(doc, l, c)
+        -- stop line start
         if c == 1 then
             return
         end
 
         local new_l, new_c = doc:position_offset(l, c, -1) 
-        return new_l, new_c, vim.last_position.l, vim.last_position.c
+        vim.max_col = new_c
+        vim.dir = 0
+        return new_l, new_c, new_l, new_c
     end,
 
-    ["l"] = function()
-        local doc = get_doc()
-        local l, c, l2, c2 = doc:get_selection()
+    ["l"] = function(doc, l, c)
         local line_text = doc.lines[l] or ""
-        caret_offset = -1        
+
+        -- stop line end
+        if c > #line_text - 2 then
+            return
+        end
         
         local new_l, new_c = doc:position_offset(l, c, 1)
-        doc:set_selection(new_l, new_c, vim.last_position.l, vim.last_position.c)
+        vim.max_col = new_c
+        vim.dir = 0
+        return new_l, new_c, new_l, new_c
     end,
 
-  ["j"] = function()
-    local doc = get_doc()
-    local fn = get_motion_fn("next-line")
-    local l, c, l2, c2 = doc:get_selection() 
-    local swap = false
-
-    local l_end = l + 1
-    local c_end = #doc.lines[l_end]
-
-    if vim.mode == "visual-line" then
-    if l > l2 then
-        swap = true
-    elseif l < l2 then
-        swap = false
-        c_end = 1
-    elseif l == l2 then
-       if swap then
-          return vim.last_position.l, vim.last_position.ll, vim.last_position.l, 1
-       else
-          return vim.last_position.l, 1, vim.last_position.l, vim.last_position.ll 
-       end
-    end
-    end
-
-    local _, _, l_start, c_start = doc:get_selection() 
-    
-    if not fn then return end
-       return l_end, c_end, l_start , c_start
+  ["j"] = function(doc, l, c)
+    -- down
+    vim.dir = -1
+    return l+1, vim.max_col, l+1 , vim.max_col
     end,
 
-  ["k"] = function()
+  ["k"] = function(doc, l, c)
     -- up
-    local doc = get_doc()
-    local fn = get_motion_fn("previous-line")
-    local l, c, l2, c2 = doc:get_selection() 
-    local swap = true
-
-
-    local l_end = l - 1
-    local c_end = 1
-
-    if vim.mode == "visual-line" then
-    if l < l2 then
-        swap = false
-    elseif l > l2 then
-        c_end = #doc.lines[l_end]
-        swap = true
-    elseif l == l2 then
-       if swap then
-          return vim.last_position.l, vim.last_position.ll, vim.last_position.l, 1
-       else
-          return vim.last_position.l, 1, vim.last_position.l, vim.last_position.ll 
-       end
-    end
-    end
-
-    local _, _, l_start, c_start = doc:get_selection()
-
-    if not fn then return end
-       return l_end, c_end, l_start , c_start
+    vim.dir = 1
+    return l-1, vim.max_col, l-1 , vim.max_col
     end,
+
   ["w"] = function()
         local doc = get_doc()
         local l, c = doc:get_selection()
@@ -962,7 +972,7 @@ vim.motions = {
 
   ["gg"] = function()
     local doc = get_doc()
-    local line = count or 1
+    local line = 1
     return line, 1, line, 1
   end,
 
@@ -1057,7 +1067,6 @@ vim.normal_keys[":"] = function()
   }
 end
 
-
 -- m: get region
 get_region = function(l1, c1, motion_prefix, text_object)
   local doc = get_doc()
@@ -1065,7 +1074,6 @@ get_region = function(l1, c1, motion_prefix, text_object)
   if text_object == "w" then
     local l2, c2 = translations["start-of-word"](doc, l1, c1)
     local l1, c1 = translations["end-of-word"](doc, l1, c1)
-    -- TODO: normalize here
     if motion_prefix == "i" then
       return l1, c1, l2, c2
     elseif motion_prefix == "a" then
@@ -1132,8 +1140,7 @@ function DocView:draw_line_body(line, x, y)
   return self:draw_line_text(line, x, y)
 end
 
-------------------------------------------------------------------------------
--- Init
+-- Initialization ---------------
 vim.set_mode("normal")
 
 return vim
