@@ -6,10 +6,7 @@
 -- TODO: cursor hides after putting
 -- TODO: normalize select, delete, put, move. they must use same coordinates, same logic
 
--- ONGOING: now turn logic into a state machine to turn the emulation realistic
---          handle_input is the state_machine run logic
---          rely of delete_to, select_to and move_to otherwise we define our own
-
+-- TODO: it must be under 1000 lines of code
 -- TODO: put can handle clipboard
 -- TODO: how to test vim, it is starting to be big, minor change is going to effect other areas
 -- TODO: enable only overrides only when vim plugin is loaded
@@ -27,6 +24,10 @@
 -- TODO: add disable vim config
 -- TODO: clean collect active view and remove local definitions 
 
+-- DONE: now turn logic into a state machine to turn the emulation realistic
+--          handle_input is the state_machine run logic
+--          rely of delete_to, select_to and move_to otherwise we define our own
+-- DONE: caret is adapting to text size
 -- DONE: correct visual j k behavior
 -- DONE: motions can be function that accept text objects
 -- DONE: deleting a line does not leave an empty line behind
@@ -88,6 +89,13 @@ local function echo(fmt, ...)
   command_line.show_message({text}, 1)
 end
 
+local base_caret_width = 10
+local function update_caret_width()
+  local scale = 1
+  local base_font_size = 20 -- TODO: enhance how caret size is calculated
+  scale = style.code_font:get_size() / base_font_size
+  style.caret_width = math.floor(base_caret_width * scale + 0.5)
+end
 
 local function get_doc()
   local dv = core.active_view
@@ -185,7 +193,7 @@ local modifying_keys = {
   ["space"] = true
 }
 
--- remaps
+-- keys remaps
 vim.remap_keys = {
     ["down"]  = "j",
     ["up"]    = "k",
@@ -330,6 +338,7 @@ function core.on_event(type, a, ...)
             vim.set_mode("normal")
             reset_state()
             instance_command:cancel_command()
+            forward_search:cancel_command()
             deselect()
             pending = ""
             return true --block
@@ -366,9 +375,10 @@ function vim.set_mode(m)
     if m == "normal" then
         return_to_line()
         style.caret_width = common.round(7 * SCALE)
+        update_caret_width()
         command_line.show_message({}, 0)     -- 0 = permanent
     elseif m == "insert" then
-        style.caret_width = common.round(2 * SCALE)
+        style.caret_width = common.round(1.5 * SCALE)
         message = {
             style.accent, "-- INSERT --",
         }
@@ -382,6 +392,7 @@ function vim.set_mode(m)
 
         -- setup caret 
         style.caret_width = common.round(7 * SCALE)
+        update_caret_width()
 
         -- message
         message = {
@@ -400,6 +411,7 @@ function vim.set_mode(m)
         
         -- setup caret 
         style.caret_width = common.round(7 * SCALE)
+        update_caret_width()
 
         -- message
         message = {
@@ -432,6 +444,10 @@ function vim.run_command(cmd)
   else
     core.log("vim unknown command: " .. cmd)
   end
+end
+
+function vim.forward_search(query)
+    -- pass
 end
 
 function vim.get_suggests(input)
@@ -608,15 +624,12 @@ resolve_motion = function(motion, motion_prefix, text_object)
   local doc = get_doc()
   local l2, c2, l1, c1 = doc:get_selection() 
   
-  -- no motion
   if motion_prefix and text_object then
       return get_region(l2, c2, motion_prefix, text_object)
   end
 
-  -- motion
   if motion and type(motion) == "function" then
       -- new l, new c, old l, old c
-      -- TODO: motion calls another get_selection()
       return motion(doc, l2, c2)
   end
 end
@@ -683,7 +696,10 @@ end
 -- default normal operator
 move_operator = function(count, motion, motion_prefix, text_object)
            local doc = get_doc()
-           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+           local l1, c1, l2, c2
+           for i = 1, count do
+              l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+           end
            if not (l1 and c1 and l2 and c2) then
                return
            end
@@ -869,8 +885,8 @@ local translations = {
   ["previous-block-start"] = translate,
 }
 
--- gets both functions and function from table
-local function get_motion_fn(name)
+-- helper to get both functions and function from table
+local function get_translation(name)
   local obj = translations[name]
   if type(obj) == "function" then
     return obj
@@ -880,7 +896,7 @@ local function get_motion_fn(name)
   return nil
 end
 
--- m: motions
+-- m: motions define the region operator act on
 vim.motions = {
     ["h"] = function(doc, l, c)
         -- stop line start
@@ -920,77 +936,68 @@ vim.motions = {
     return l-1, vim.max_col, l-1 , vim.max_col
     end,
 
-  ["w"] = function()
-        local doc = get_doc()
-        local l, c = doc:get_selection()
+  ["w"] = function(doc, l, c)
         local l2, c2 = l, c
-        count = count or 1
-        local next_word_start = get_motion_fn("next-word-start")
+        local next_word_start = get_translation("next-word-start")
         l2, c2 = next_word_start(doc, l, c)
-        return l, c, l2, c2
+        return l2, c2, l2, c2
     end,
-  ["b"] = function()
-    local doc = get_doc()
-    local previous_word_start = get_motion_fn("previous-word-start")
-    count = count or 1
-    for _ = 1, count do
-        doc:move_to(previous_word_start, doc)
-    end
+  ["b"] = function(doc, l, c)
+    local previous_word_start = get_translation("previous-word-start")
+    l, c = previous_word_start(doc, l, c)
+    return l, c, l, c
   end,
 
-  ["e"] = function()
-    local doc = get_doc()
-    count = count or 1
-    local next_word_start = get_motion_fn("next-word-start")
-    for _ = 1, count do
-        doc:move_to(next_word_start, doc)
-        doc:move_to(translations["end-of-word"], doc)
-    end
+  ["e"] = function(doc, l, c)
+    local next_word_start = get_translation("next-word-start")
+    local word_end = get_translation("end-of-word")
+    l, c = next_word_start(doc, l, c)
+    l, c = word_end(doc, l, c)
+    return l, c, l, c
   end,
 
-  ["0"] = function()
-    local doc = get_doc()
+  ["0"] = function(doc, l, c)
     local line, _ = doc:get_selection()
     return line, 1, line, 1
   end,
 
-  ["^"] = function()
-    local doc = get_doc()
+  ["^"] = function(doc, l, c)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local first_non_ws = text:find("%S") or 1
     return line, first_non_ws, line, first_non_ws
   end,
 
-  ["$"] = function()
-    local doc = get_doc()
+  ["$"] = function(doc, l, c)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local last_col = #text + 1
     return line, last_col, line, last_col
   end,
 
-  ["gg"] = function()
-    local doc = get_doc()
-    local line = 1
+  ["gg"] = function(doc, l, c)
+    local line
+    if get_count() > 1 then 
+      line = get_count()
+    else
+      line = 1
+    end 
     return line, 1, line, 1
   end,
 
-  ["G"] = function()
-    local doc = get_doc()
+  ["G"] = function(doc, l, c)
     local last_line = #doc.lines
     local last_col = #(doc.lines[last_line] or "") + 1
     return last_line, last_col, last_line, last_col
   end,
-  ["d"] = function ()
+
+  ["d"] = function (doc, l, c)
     -- TODO: use translation end of line
-    local doc = get_doc()
-    local line = doc:get_selection()
     local total_lines = #doc.lines
-    if line >= total_lines then
-        return line, 1, line, #doc.lines[line]
+    if l >= total_lines then
+        return l, 1, l, #doc.lines[l]
     else
-        return line, 1, line + 1, 1
+        return l, 1, l + 1, 1
     end
  end,
 }
@@ -1060,6 +1067,23 @@ vim.normal_keys[":"] = function()
     end,
     suggest = function(input)
       return vim.get_suggests(input)
+    end,
+    cancel = function()
+      vim.set_mode("normal")     
+    end
+  }
+end
+
+-- command to launch the search line
+vim.normal_keys["/"] = function()
+  vim.set_mode("command")        
+  forward_search:start_command{
+    submit = function(input)
+      vim.forward_search(input) -- jump to first occurance
+      vim.set_mode("normal")     
+    end,
+    suggest = function(input)
+      return "" -- highlights user input, kind of suggests
     end,
     cancel = function()
       vim.set_mode("normal")     

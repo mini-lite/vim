@@ -1,0 +1,10 @@
+* Vim
+vim emulation for pragtical and lite xl editors
+
+* Dependencies
+
+* Features
+
+* usage and keymaps 
+
+
