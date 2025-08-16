@@ -2,9 +2,13 @@
 
 -- Change log-----------------------------------------------------------------
 
+-- TODO: implemet start * 
+-- TODO: reverse search is not working
+-- TODO: search returns a selection we should be able to yank directly (normal + 1 selection = yank possible)
+-- TODO: add second count to implement something like 3d2k
 -- TODO: put adds one character
--- TODO: cursor hides after putting
--- TODO: normalize select, delete, put, move. they must use same coordinates, same logic
+-- TODO: cursor hides after putting multiple lines
+-- TODO: normalize select, delete, put, move. they must use same coordinates, same clear logic for the future
 
 -- TODO: it must be under 1000 lines of code
 -- TODO: put can handle clipboard
@@ -68,6 +72,7 @@ local translate = require "core.doc.translate"
 local DocView = require "core.docview"
 local config = require "core.config" 
 local ime = require "core.ime"
+local search = require "plugins.mini-search"
 
 -- m: forward definitions
 local resolve_motion
@@ -107,15 +112,17 @@ end
 
 local caret_offset = 0
 
-local function echo_char_under_cursor()
-  local doc = get_doc()
-  local line, col = doc:get_selection()
-  local text = doc.lines[line] or ""
-  local char = text:sub(col, col)  -- Lite XL col is 1-based
-  if char == "" then
-    char = "<EOL>"
+local function center_selection_in_view(doc, line)
+  local docview = core.active_view
+  if not docview then return end
+  local minl, maxl = docview:get_visible_line_range()
+  local center = true
+
+  if line <= maxl and line >= minl then
+      center = false
   end
-  echo("%s", char)
+  
+  docview:scroll_to_line(line, false, center) 
 end
 
 local vim = {
@@ -447,7 +454,25 @@ function vim.run_command(cmd)
 end
 
 function vim.forward_search(query)
-    -- pass
+    local doc = get_doc()
+    local l, c = doc:get_selection()
+    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = false })
+    if (line and col and line2 and col2) then
+        vim.search_query = query
+        doc:set_selection(line2, col2-1, line, col)
+        center_selection_in_view(doc, line, col)
+    end
+end
+
+function vim.backward_search(query)
+    local doc = get_doc()
+    local l, c = doc:get_selection()
+    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = false, reverse = true})
+    if (line and col and line2 and col2) then
+        vim.search_query = query
+        doc:set_selection(line, col, line2, col2-1)
+        center_selection_in_view(doc, line, col)
+    end
 end
 
 function vim.get_suggests(input)
@@ -704,6 +729,7 @@ move_operator = function(count, motion, motion_prefix, text_object)
                return
            end
            doc:set_selection(l1, c1, l1, c1)
+           center_selection_in_view(doc, l1, c1)
 end
 
 -- operator by definition needs a motion (area to work on)
@@ -1008,7 +1034,6 @@ vim.normal_keys = {
   ["/"] = function() end,
   ["?"] = function() end,
   ["*"] = vim.search_word_under_cursor,
-  ["#"] = echo_char_under_cursor,
   ["i"] = function()
     vim.set_mode("insert")
   end,
@@ -1043,6 +1068,12 @@ vim.normal_keys = {
   ["P"] = function(count)
       -- TODO: use count for loop
       put("up")
+  end,
+  ["n"] = function(count)
+      vim.forward_search(vim.search_query)
+  end,
+  ["N"] = function(count)
+      vim.backward_search(vim.search_query)
   end,
 }
 
