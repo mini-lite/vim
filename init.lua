@@ -3,12 +3,11 @@
 -- Change log-----------------------------------------------------------------
 
 -- BUGS ----------------------------------------------------------------------
-
--- TODO: enhance put() 
---       - dd does does yank but put does not recognize is full line to yank below 
---       - put adds one character when yanked is visual line
+-- TODO: we are moving to center even if visible when clicking $
 -- TODO: cursor hides after putting multiple lines
--- TODO: normalize select, delete, put, move. they must use same coordinates, same clear logic for the future
+-- TODO: clean yank paths
+--      - normalize select, delete, put, move. 
+--      - they must use same coordinates, same clear logic for the future.
 
 -- FEATURES ------------------------------------------------------------------
 
@@ -30,6 +29,9 @@
 -- TODO: enable only overrides only when vim plugin is loaded
 -- TODO: <command line> enhance command line messaging system with FiFo with time 
 
+-- DONE: enhance put() 
+--       - dd does does yank but put does not recognize is full line to yank below 
+--       - put adds one character when yanked is visual line
 -- DONE -----------------------------------------------------------------------
 -- DONE: delete what is selected, we need a mode o-pending where motion for operation
 -- DONE: refactor to simplify motions code
@@ -82,6 +84,11 @@ local DocView = require "core.docview"
 local config = require "core.config" 
 local ime = require "core.ime"
 local search = require "core.doc.search" -- this or "core.search" 
+
+-- vim plugin defaults
+config.vim = {
+  unified_search = true,
+}
 
 -- m: forward definitions
 local resolve_motion
@@ -464,8 +471,10 @@ end
 
 function vim.forward_search(query)
     local doc = get_doc()
+    local line, col, line2, col2
     local l, c = doc:get_selection()
-    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = false })
+    line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search })
+
     if (line and col and line2 and col2) then
         vim.search_query = query
         doc:set_selection(line2, col2-1, line, col)
@@ -476,7 +485,7 @@ end
 function vim.backward_search(query)
     local doc = get_doc()
     local l, c = doc:get_selection()
-    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = false, reverse = true})
+    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search, reverse = true})
     if (line and col and line2 and col2) then
         vim.search_query = query
         doc:set_selection(line, col, line2, col2-1)
@@ -498,8 +507,7 @@ function vim.get_suggests(input)
   return suggestions
 end
 
-local function get_text(line1, col1, line2, col2)
-  -- line and columns here are 0 col based
+local function get_text(line1, col1, line2, col2) -- m: get_text
   local doc = get_doc()
   if not doc then return end
 
@@ -542,16 +550,20 @@ local function yank(l1, c1, l2, c2, flash_time)
     if not (l1 and c1 and l2 and c2) then
         l1, c1, l2, c2 = doc:get_selection()
     end
-
+    local yank_type = "char"
+    local line_width = 0
     local text = get_text(l1, c1, l2, c2)
 
-    -- TODO: find a better way then using modes here
-    local yank_type = "char"
-    if vim.mode == "normal" or vim.mode == "visual-line" then
-        yank_type = "line"
-    elseif vim.mode == "visual" then
-        yank_type = "char"
-    end
+    if l1 == l2 then -- single line case
+        line_width = #doc.lines[l1]
+        if #text == line_width then
+           yank_type = "line"
+        end
+    else
+        if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
+           yank_type = "line"
+        end
+    end 
 
     vim.registers['"'] = { text = text, type = yank_type }
 
@@ -561,26 +573,50 @@ end
 
 -- m: delete()
 local function delete(l1, c1, l2, c2)
+  -- last: l1, c1 |  first: l2, c2 
   local doc = get_doc() 
   if not doc then return end
+  local text
 
   if not (l1 and c1 and l2 and c2) then
     l1, c1, l2, c2 = doc:get_selection()
-    if l1 > l2 or (l1 == l2 and c1 > c2) then
-      l1, c1, l2, c2 = l2, c2, l1, c1
-    end
+  end
 
-    local text = doc.lines[l2]
-    if c2 == #text then -- we are at \n then next line
+  if l2 == l1 then
+     text = doc.lines[l2]
+     if c2 >= c1 then 
+        if c2 == #text then
+          l2 = l2 + 1
+          c2 = 1
+        else
+          c2 = c2 + 1
+        end
+     else
+        if c1 == #text then
+          l1 = l1 + 1
+          c1 = 1
+        else
+          c1 = c1 + 1
+        end
+     end 
+  elseif l2 > l1 then
+     text = doc.lines[l2]
+     if c2 == #text then
         l2 = l2 + 1
         c2 = 1
-    else
-        c2 = c2 + 1 -- doc:remove uses 1-col
-    end
-  elseif l1 > l2 or (l1 == l2 and c1 > c2) then
-    l1, c1, l2, c2 = l2, c2, l1, c1
-    c2 = c2 + 1
+     else 
+        c2 = c2 + 1
+     end
+  elseif l2 < l1 then
+     text = doc.lines[l1]
+     if c1 == #text then
+        l1 = l1 + 1
+        c1 = 1
+     else
+        c1 = c1 + 1
+     end
   end
+  
   doc:remove(l1, c1, l2, c2)
 end
 
@@ -1105,6 +1141,25 @@ vim.visual_keys = {
       local query = get_text(end_l, end_c, start_l, start_c)
       vim.forward_search(query)
   end,
+
+-- this is a line
+-- this is another line
+-- this is another line 2
+ ["#"] = function() -- text 
+      local doc = get_doc()
+      -- last, first
+      local l, c, oldl, oldc = doc:get_selection()
+      core.log("selection: %s %s %s %s", l, c, oldl, oldc)
+      core.log("text: %s", get_text(l, c, oldl, oldc))
+      core.log("line length: %s", #doc.lines[l])
+      yank(l, c, oldl, oldc)
+      local reg = vim.registers['"'] or { text = "", type = "char" }
+      local text = reg.text or ""
+      core.log("yanked text: %s", text)
+      core.log("yanked type: %s", reg.type)
+      core.log("yanked text length: %s", #text)
+      delete(l, c, oldl, oldc)
+  end,
 }
 
 -- command to launch the command line
@@ -1130,6 +1185,23 @@ vim.normal_keys["/"] = function()
   forward_search:start_command{
     submit = function(input)
       vim.forward_search(input) -- jump to first occurance
+      vim.set_mode("normal")     
+    end,
+    suggest = function(input)
+      return "" -- highlights user input, kind of suggests
+    end,
+    cancel = function()
+      vim.set_mode("normal")     
+    end
+  }
+end
+
+-- command to launch the search line
+vim.normal_keys["?"] = function()
+  vim.set_mode("command")        
+  backward_search:start_command{
+    submit = function(input)
+      vim.backward_search(input) -- jump to first occurance
       vim.set_mode("normal")     
     end,
     suggest = function(input)
