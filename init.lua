@@ -3,36 +3,37 @@
 -- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
--- TODO: add default operators to vim operators
--- TODO: we are moving to center even if visible when clicking $
+-- TODO: delete multiple lines throws selection below we should stay on top
 
 -- FEATURES ------------------------------------------------------------------
 
--- TODO: check unused variables, enable lsp and reformat code
+-- TODO: put can handle clipboard , add a config that allows vim system to use clipboard
+-- TODO: add second count to implement something like 3d2k
 -- TODO: follow delete() naming and reduce noise adopt short naming
 -- TODO: start pomping a command parser
--- TODO: add second count to implement something like 3d2k
 -- TODO: implement ctrl+o and ctrl+O
 -- TODO: it must be under 1000 lines of code
--- TODO: put can handle clipboard
--- TODO: shift is still selecting in normal disable it
--- TODO: normal mode is working outside doc view
--- TODO: we need to set space as leader or adapt if user want space as leader
+-- TODO: shift is still selecting in normal disable it, either disable this or support it
+-- TODO: normal mode is working outside doc view, to benifit from : command line outside
+-- TODO: "space" can be used as leader or adapt if user want space as leader
 -- TODO: let user extend commands
--- TODO: add disable vim config
--- TODO: clean collect active view and remove local definitions 
+-- TODO: add disable vim config, to allow user enable or disable it
 -- TODO: how to test vim, it is starting to be big, minor change is going to effect other areas
 -- TODO: enable only overrides only when vim plugin is loaded
--- TODO: <command line> enhance command line messaging system with FiFo with time 
+-- TODO: <command line> enhance command line messaging system with FiFo with time
 
 -- DONE -----------------------------------------------------------------------
+
+-- DONE: check unused variables, enable lsp and reformat code
+-- DONE: we are moving to center even if visible when clicking $
+-- DONE: add default operators to vim operators
 -- DONE: add a config to use only / and ? to search entire file
 -- DONE: clean yank paths
---      - normalize select, delete, put, move. 
+--      - normalize select, delete, put, move.
 --      - they must use same coordinates, same clear logic for the future.
 -- DONE: cursor hides after putting multiple lines
--- DONE: enhance put() 
---       - dd does does yank but put does not recognize is full line to yank below 
+-- DONE: enhance put()
+--       - dd does does yank but put does not recognize is full line to yank below
 --       - put adds one character when yanked is visual line
 -- DONE: search returns a selection we should be able to yank directly (normal + 1 selection = yank possible)
 -- DONE: delete what is selected, we need a mode o-pending where motion for operation
@@ -56,14 +57,14 @@
 -- DONE: any delete will go to register to be put
 -- DONE: key flow in insert is not smooth, is typing smooth now ???
 -- DONE: vim is overriding arrows in normal mode
--- DONE: dd delete 
+-- DONE: dd delete
 -- DONE: a bug we need to click ddd to get dd
--- DONE: copy is adding new lines 
+-- DONE: copy is adding new lines
 -- DONE: enhance visual line mode
 -- DONE: correct cursor on selection problem, override all doc view related functions
-         -- selection region adapted
-         -- make sure yank is correct
-         -- put should be correct too
+-- selection region adapted
+-- make sure yank is correct
+-- put should be correct too
 -- DONE: yanking shows flash of region change color to intense
 -- DONE: visual select does not start from current char
 -- DONE: enable yank and put
@@ -79,15 +80,17 @@
 local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
-local keymap = require "core.keymap"
 local style = require "core.style"
 local translate = require "core.doc.translate"
 local DocView = require "core.docview"
-local config = require "core.config" 
-local ime = require "core.ime"
+local config = require "core.config"
 local search = require "core.doc.search"
 
 -- vim plugin defaults
+---@class VimConfig
+---@field unified_search boolean
+---@class core.config
+---@field vim VimConfig
 config.vim = {
   unified_search = true,
 }
@@ -95,10 +98,6 @@ config.vim = {
 -- m: forward definitions
 local resolve_motion
 local get_region
-local select_operator
-local line_select_operator
-local block_select_operator
-local move_operator
 
 -- m: require
 local command_line = require "plugins.command-line"
@@ -109,7 +108,7 @@ command_line.minimal_status_view = true -- only item will show
 -- helper for debug
 local function echo(fmt, ...)
   local text = string.format(fmt, ...)
-  command_line.show_message({text}, 1)
+  command_line.show_message({ text }, 1)
 end
 
 -- TODO: rework this part I am not sure
@@ -129,19 +128,15 @@ local function get_doc()
   return dv.doc
 end
 
-local caret_offset = 0
-
-local function center_selection_in_view(doc, line)
+local function center_selection_in_view(_, line)
   local docview = core.active_view
   if not docview then return end
   local minl, maxl = docview:get_visible_line_range()
   local center = true
-
-  if line <= maxl and line >= minl then
-      center = false
+  if line <= maxl + 1 and line >= minl - 1 then
+    return
   end
-  
-  docview:scroll_to_line(line, false, center) 
+  docview:scroll_to_line(line, false, center)
 end
 
 local vim = {
@@ -153,7 +148,7 @@ local vim = {
   operators = {},
   motions = {},
   last_position = {}, -- save cursor position befor executions
-  max_col = 0;
+  max_col = 0,
   normal_keys = {},
   visual_keys = {},
   remap_keys = {},
@@ -170,11 +165,12 @@ local state = {
   register = nil,
 }
 
--- remove selection 
+-- remove selection
 local function deselect()
   local doc = get_doc()
-  for idx, line1, col1, line2, col2 in doc:get_selections(true) do
-      doc:set_selections(idx, line2, col2)
+  if not doc then return end
+  for idx, _, _, line2, col2 in doc:get_selections(true) do
+    doc:set_selections(idx, line2, col2)
   end
 end
 
@@ -198,16 +194,13 @@ end
 local instance_command = command_line.new()
 instance_command:set_prompt(":")
 
--- set forward search line 
+-- set forward search line
 local forward_search = command_line.new()
 forward_search:set_prompt("/")
 
--- set backward search line 
+-- set backward search line
 local backward_search = command_line.new()
 backward_search:set_prompt("?")
-
--- keys
-local pressed = {}
 
 -- keys that can modify text
 local modifying_keys = {
@@ -221,10 +214,10 @@ local modifying_keys = {
 
 -- keys remaps
 vim.remap_keys = {
-    ["down"]  = "j",
-    ["up"]    = "k",
-    ["left"]  = "h",
-    ["right"] = "l",
+  ["down"]  = "j",
+  ["up"]    = "k",
+  ["left"]  = "h",
+  ["right"] = "l",
 }
 
 -- accumulate keys
@@ -245,49 +238,47 @@ local function handle_input(key)
   end
 
   -- accumulate count digits only if no operator pending
-  if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig )) then
+  if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig)) then
     prev_dig = true
     state.count = (state.count == 1 and "" or tostring(state.count)) .. key
     return true
   end
 
   pending = pending .. key -- by now all numbers are filered
-  prev_dig = false -- other key then digit is pressed
-  
+  prev_dig = false         -- other key then digit is pressed
   if vim.mode == "normal" then
-    state.operator = move_operator
+    state.operator = vim.operators["move"]
 
-    -- normal key like i and v 
+    -- normal key like i and v
     if vim.normal_keys and vim.normal_keys[key] then
-        vim.normal_keys[key]()
-        pending = ""
-        reset_state()
-        return true
+      vim.normal_keys[key]()
+      pending = ""
+      reset_state()
+      return true
     end
 
     if vim.normal_keys and vim.normal_keys[pending] then
-        vim.normal_keys[pending]()
-        pending = ""
-        reset_state()
-        return true
+      vim.normal_keys[pending]()
+      pending = ""
+      reset_state()
+      return true
     end
-
-  elseif vim.mode == "visual"  or vim.mode == "visual-line" then 
+  elseif vim.mode == "visual" or vim.mode == "visual-line" then
     if vim.visual_keys and vim.visual_keys[key] then
-        vim.visual_keys[key]()
-        pending = ""
-        reset_state()
-        vim.set_mode("normal")
-        return true
+      vim.visual_keys[key]()
+      pending = ""
+      reset_state()
+      vim.set_mode("normal")
+      return true
     end
   end
 
   if vim.mode == "visual" then
-     state.operator = select_operator
+    state.operator = vim.operators["select"]
   end
 
   if vim.mode == "visual-line" then
-     state.operator = line_select_operator
+    state.operator = vim.operators["line_select"]
   end
 
   -- 1. operator go o-pending waiting for motion
@@ -307,7 +298,7 @@ local function handle_input(key)
   if vim.motions[pending] then
     local count = get_count()
     if state.operator then -- there is an operator already
-       state.operator(count, vim.motions[pending], nil, nil)
+      state.operator(count, vim.motions[pending], nil, nil)
     end
     pending = ""
     reset_state()
@@ -315,10 +306,10 @@ local function handle_input(key)
   end
 
   -- 3. pending with prefix i or a
-  if #pending == 2 and (pending:sub(1,1) == "i" or pending:sub(1,1) == "a") then
-    state.motion_prefix = pending:sub(1,1) -- 'i' or 'a'
-    state.text_object = pending:sub(2,2)
- 
+  if #pending == 2 and (pending:sub(1, 1) == "i" or pending:sub(1, 1) == "a") then
+    state.motion_prefix = pending:sub(1, 1) -- 'i' or 'a'
+    state.text_object = pending:sub(2, 2)
+
     if state.motion_prefix and state.text_object then
       local count = get_count()
       state.operator(count, nil, state.motion_prefix, state.text_object)
@@ -334,41 +325,37 @@ end
 -- m: on_event override
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
-
   local doc = get_doc()
 
   if doc and doc.filename then
     if type == "textinput" then
-        if handle_input(a) then
-          return true -- block 
-        end
+      if handle_input(a) then
+        return true -- block
+      end
     elseif type == "keypressed" then
-        pressed[a] = true
-
-        -- some key remaps to input
-        if vim.remap_keys[a] and vim.mode ~= "normal" then
-            if handle_input(vim.remap_keys[a]) then
-                return true
-            end
+      -- some key remaps to input
+      if vim.remap_keys[a] and vim.mode ~= "normal" then
+        if handle_input(vim.remap_keys[a]) then
+          return true
         end
+      end
 
-        if a == "escape" then -- no return to let escape reach other modules
-            instance_command:cancel_command()
-            forward_search:cancel_command()
-            deselect()
-            pending = ""
-            reset_state() 
-            vim.set_mode("normal")
+      if a == "escape" then -- no return to let escape reach other modules
+        instance_command:cancel_command()
+        forward_search:cancel_command()
+        deselect()
+        pending = ""
+        reset_state()
+        vim.set_mode("normal")
+      end
+
+      if vim.mode == "normal" then
+        if modifying_keys[a] then
+          return true -- block in normal mode
         end
-
-        if vim.mode == "normal" then
-            if modifying_keys[a] then
-                return true -- block in normal mode
-            end
-        end
-
+      end
     elseif type == "keyreleased" then
-        pressed[a] = false
+      -- released
     end
   end -- active view
 
@@ -388,55 +375,57 @@ end
 
 -- m: mode_switch
 function vim.set_mode(m)
-    local message = ""
-    if m == "normal" then
-        return_to_line()
-        style.caret_width = common.round(7 * SCALE)
-        update_caret_width()
-        command_line.show_message({}, 0)     -- 0 = permanent
-    elseif m == "insert" then
-        style.caret_width = common.round(1.5 * SCALE)
-        message = {
-            style.accent, "-- INSERT --",
-        }
-        command_line.show_message(message, 0) -- 0 = permanent
-    elseif m == "visual" then
-        local doc = get_doc()
-        local l, c = doc:get_selection() -- c starts from 1
-        vim.last_position = {l=l, c=c} -- record last position to return to
-        style.caret_width = common.round(7 * SCALE)
-        update_caret_width()
-        message = {
-            style.text, "-- VISUAL --",
-        }
+  local message = {}
+  if m == "normal" then
+    return_to_line()
+    style.caret_width = common.round(7 * SCALE)
+    update_caret_width()
+    command_line.show_message({}, 0) -- 0 = permanent
+  elseif m == "insert" then
+    style.caret_width = common.round(1.5 * SCALE)
+    message = {
+      style.accent, "-- INSERT --",
+    }
+    command_line.show_message(message, 0) -- 0 = permanent
+  elseif m == "visual" then
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()     -- c starts from 1
+    vim.last_position = { l = l, c = c } -- record last position to return to
+    style.caret_width = common.round(7 * SCALE)
+    update_caret_width()
+    message = {
+      style.text, "-- VISUAL --",
+    }
 
-        command_line.show_message(message, 0) -- 0 = permanent
-    elseif m == "visual-line" then 
-        local doc = get_doc()
-        local l, c = doc:get_selection() -- c starts from 1
-        vim.last_position = {l=l, c=c, ll=#doc.lines[l]} -- record last position to return to
-        doc:set_selection(l, #doc.lines[l], l, 1)
-        style.caret_width = common.round(7 * SCALE)
-        update_caret_width()
-        message = {
-            style.text, "-- VISUAL-LINE --",
-        }
-        command_line.show_message(message, 0) -- 0 = permanent
-     elseif m == "o-pending" then
-        message = {
-            style.text, "-- O-PENDING --",
-        }
-        command_line.show_message(message, 0) -- 0 = permanent
-    end
+    command_line.show_message(message, 0) -- 0 = permanent
+  elseif m == "visual-line" then
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()                         -- c starts from 1
+    vim.last_position = { l = l, c = c, ll = #doc.lines[l] } -- record last position to return to
+    doc:set_selection(l, #doc.lines[l], l, 1)
+    style.caret_width = common.round(7 * SCALE)
+    update_caret_width()
+    message = {
+      style.text, "-- VISUAL-LINE --",
+    }
+    command_line.show_message(message, 0) -- 0 = permanent
+  elseif m == "o-pending" then
+    message = {
+      style.text, "-- O-PENDING --",
+    }
+    command_line.show_message(message, 0) -- 0 = permanent
+  end
   vim.mode = m
 end
 
 local vim_ex_commands = {
-  ["w"]   = { action = "doc:save", desc = "Save file" },
-  ["q"]   = { action = "core:quit", desc = "Quit editor" },
-  ["q!"]  = { action = "core:force-quit", desc = "Force quit" },
-  ["qa"]  = { action = "core:quit", desc = "Quit all" },
-  ["e!"]  = { action = "doc:reload", desc = "reload fresh" }
+  ["w"]  = { action = "doc:save", desc = "Save file" },
+  ["q"]  = { action = "core:quit", desc = "Quit editor" },
+  ["q!"] = { action = "core:force-quit", desc = "Force quit" },
+  ["qa"] = { action = "core:quit", desc = "Quit all" },
+  ["e!"] = { action = "doc:reload", desc = "reload fresh" }
 }
 
 function vim.run_command(cmd)
@@ -449,27 +438,29 @@ function vim.run_command(cmd)
 end
 
 function vim.forward_search(query)
-    local doc = get_doc()
-    local line, col, line2, col2
-    local l, c = doc:get_selection()
-    line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search })
+  local doc = get_doc()
+  if not doc then return end
+  local line, col, line2, col2
+  local l, c = doc:get_selection()
+  line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search })
 
-    if (line and col and line2 and col2) then
-        vim.search_query = query
-        doc:set_selection(line2, col2-1, line, col)
-        center_selection_in_view(doc, line, col)
-    end
+  if (line and col and line2 and col2) then
+    vim.search_query = query
+    doc:set_selection(line2, col2 - 1, line, col)
+    center_selection_in_view(doc, line)
+  end
 end
 
 function vim.backward_search(query)
-    local doc = get_doc()
-    local l, c = doc:get_selection()
-    local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search, reverse = true})
-    if (line and col and line2 and col2) then
-        vim.search_query = query
-        doc:set_selection(line, col, line2, col2-1)
-        center_selection_in_view(doc, line, col)
-    end
+  local doc = get_doc()
+  if not doc then return end
+  local l, c = doc:get_selection()
+  local line, col, line2, col2 = search.find(doc, l, c, query, { wrap = config.vim.unified_search, reverse = true })
+  if (line and col and line2 and col2) then
+    vim.search_query = query
+    doc:set_selection(line, col, line2, col2 - 1)
+    center_selection_in_view(doc, line)
+  end
 end
 
 function vim.get_suggests(input)
@@ -499,7 +490,7 @@ local function get_text(line1, col1, line2, col2) -- m: get_text
     local t = doc.lines[line] or ""
     local s = (line == line1) and col1 or 1
     local e = (line == line2) and col2 or #t
-    out[#out+1] = t:sub(s, e)
+    out[#out + 1] = t:sub(s, e)
   end
 
   return table.concat(out, "")
@@ -507,46 +498,47 @@ end
 
 -- m: flash()
 local function flash(l1, c1, l2, c2, color, time, doc)
-    core.add_thread(function()
-        local old_caret_width = style.caret_width
-        style.caret_width = 0
-        local old_selection_style = style.selection
-        style.selection = color
-        doc:set_selection(l1, c1, l2, c2)
-        coroutine.yield(time)
-        style.caret_width = old_caret_width
-        style.selection = old_selection_style
-        core.redraw = true
-        deselect() -- NOTE: we may lose selection
-    end)
+  core.add_thread(function()
+    local old_caret_width = style.caret_width
+    style.caret_width = 0
+    local old_selection_style = style.selection
+    style.selection = color
+    doc:set_selection(l1, c1, l2, c2)
+    coroutine.yield(time)
+    style.caret_width = old_caret_width
+    style.selection = old_selection_style
+    core.redraw = true
+    deselect() -- NOTE: we may lose selection
+  end)
 end
 
 -- m: yank()
 local function yank(l1, c1, l2, c2, flash_time)
-    local flash_time = flash_time or 0
-    local flash_color = style.accent
-    local doc = get_doc()
-    if not (l1 and c1 and l2 and c2) then
-        l1, c1, l2, c2 = doc:get_selection()
+  local ft = flash_time or 0
+  local flash_color = style.accent
+  local doc = get_doc()
+  if not doc then return end
+  if not (l1 and c1 and l2 and c2) then
+    l1, c1, l2, c2 = doc:get_selection()
+  end
+  local yank_type = "char"
+  local line_width = 0
+  local text = get_text(l1, c1, l2, c2)
+
+  if l1 == l2 then -- single line case
+    line_width = #doc.lines[l1]
+    if #text == line_width then
+      yank_type = "line"
     end
-    local yank_type = "char"
-    local line_width = 0
-    local text = get_text(l1, c1, l2, c2)
+  else
+    if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
+      yank_type = "line"
+    end
+  end
 
-    if l1 == l2 then -- single line case
-        line_width = #doc.lines[l1]
-        if #text == line_width then
-           yank_type = "line"
-        end
-    else
-        if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
-           yank_type = "line"
-        end
-    end 
+  vim.registers['"'] = { text = text, type = yank_type }
 
-    vim.registers['"'] = { text = text, type = yank_type }
-
-    flash(l1, c1, l2, c2, flash_color, flash_time, doc)
+  flash(l1, c1, l2, c2, flash_color, ft, doc)
 end
 
 -- m: delete()
@@ -578,169 +570,165 @@ end
 
 -- m: put()
 local function put(direction, count)
-    count = count or 1
-    local doc = get_doc()
-    local l, c = doc:get_selection()
-    local reg = vim.registers['"'] or { text = "", type = "char" }
-    local yank_type = reg.type or "char"
-    local text = reg.text or ""
-    local flash_time = 0.2
-    local flash_color = style.selection
-    if not reg.text then return end
+  count = count or 1
+  local doc = get_doc()
+  if not doc then return end
 
-    if direction ~= "up" then
-        direction = "down"
-    end
+  local l, c = doc:get_selection()
+  local reg = vim.registers['"'] or { text = "", type = "char" }
+  local yank_type = reg.type or "char"
+  local text = reg.text or ""
+  local flash_time = 0.2
+  local flash_color = style.selection
+  if not reg.text then return end
 
-    local lines = {}
-    for line in text:gmatch("([^\n]+)") do
-        table.insert(lines, line)
-    end
+  if direction ~= "up" then
+    direction = "down"
+  end
 
-    for _ = 1, count do
-        if yank_type == "line" then
-            local insert_line = direction == "down" and (l + 1) or l
-            local line_textt = nil
-            if direction == "down" then
-                for i = #lines, 1, -1 do
-                    line_textt = lines[i]
-                    if not line_textt:match("\n$") then
-                        line_textt = line_textt .. "\n"
-                    end
-                    doc:insert(insert_line, 1, line_textt)
-                    doc:set_selection(insert_line, 1)
-                end
-                flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
-            else
-                for i, line_text in ipairs(lines) do
-                    if not line_text:match("\n$") then
-                        line_textt = line_text .. "\n"
-                    end
-                    doc:insert(insert_line + i - 1, 1, line_textt)
-                    doc:set_selection(insert_line + i - 1, 1)
-                end
-                flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
-            end
-        else -- char
-            doc:insert(l, c+1, text) -- +1 after cursor
-            local nl, nc = doc:position_offset(l, c, #text)
-            doc:set_selection(nl, nc)
-            flash(l, c + 1, nl, nc, flash_color, flash_time, doc)
+  local lines = {}
+  for line in text:gmatch("([^\n]+)") do
+    table.insert(lines, line)
+  end
+
+  for _ = 1, count do
+    if yank_type == "line" then
+      local insert_line = direction == "down" and (l + 1) or l
+      local line_textt = ""
+      if direction == "down" then
+        for i = #lines, 1, -1 do
+          line_textt = lines[i]
+          if not line_textt:match("\n$") then
+            line_textt = line_textt .. "\n"
+          end
+          doc:insert(insert_line, 1, line_textt)
+          doc:set_selection(insert_line, 1)
         end
+        flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
+      else
+        for i, line_text in ipairs(lines) do
+          if not line_text:match("\n$") then
+            line_textt = line_text .. "\n"
+          end
+          doc:insert(insert_line + i - 1, 1, line_textt)
+          doc:set_selection(insert_line + i - 1, 1)
+        end
+        flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
+      end
+    else                         -- char
+      doc:insert(l, c + 1, text) -- +1 after cursor
+      local nl, nc = doc:position_offset(l, c, #text)
+      doc:set_selection(nl, nc)
+      flash(l, c + 1, nl, nc, flash_color, flash_time, doc)
     end
+  end
 end
 
 resolve_motion = function(motion, motion_prefix, text_object)
   local doc = get_doc()
-  local l2, c2, l1, c1 = doc:get_selection() 
-  
+  if not doc then return end
+  local l2, c2 = doc:get_selection()
+
   if motion_prefix and text_object then
-      return get_region(l2, c2, motion_prefix, text_object)
+    return get_region(l2, c2, motion_prefix, text_object)
   end
 
   if motion and type(motion) == "function" then
-      -- new l, new c, old l, old c
-      return motion(doc, l2, c2)
+    -- new l, new c, old l, old c
+    return motion(doc, l2, c2)
   end
 end
 
 
--- m: operators 
-line_select_operator = function(count, motion, motion_prefix, text_object)
-    local doc = get_doc()
-
-    local endl, endc, startl, startc = doc:get_selection() -- line already selected
-    local endl, endc, _, _ = resolve_motion(motion, motion_prefix, text_object)
-
-    if not (endl and endc and startl and startc ) then
-        return
-    end
-    
-    local text = doc.lines[endl]
-
-    if startl == endl then
-        if vim.dir > 0 then
-            startc = #text
-            endc = 1
-        elseif vim.dir < 0 then
-            startc = 1
-            endc = #text 
-        else
-            -- pass
-        end
-    elseif startl > endl then
-        local text = doc.lines[startl]
-        startc = #text
-        endc = 1
-    elseif startl < endl then
-        local text = doc.lines[endl]
-        startc = 1
-        endc = #text
-    end
-
-    doc:set_selection(endl, endc, startl, startc)
-end
-
-select_operator = function(count, motion, motion_prefix, text_object)
-    local doc = get_doc()
-    local endl, endc, startl, startc = doc:get_selection()
-    local l, c
-
-    -- if return equl pair then just movement
-    endl, endc, l, c = resolve_motion(motion, motion_prefix, text_object)
-
-    if not (endl == l and endc == c) then
-        startl = l
-        startc = c
-    end
-    
-    if not (endl and endc and startl and startc) then
-        return
-    end
-
-    doc:set_selection(endl, endc, startl, startc)
-end
-
--- default normal operator
-move_operator = function(count, motion, motion_prefix, text_object)
-           local doc = get_doc()
-           local l1, c1, l2, c2
-           for i = 1, count do
-              l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-           end
-           if not (l1 and c1 and l2 and c2) then
-               return
-           end
-           doc:set_selection(l1, c1, l1, c1)
-           center_selection_in_view(doc, l1, c1)
-end
-
+-- m: operators
 -- operator by definition needs a motion (area to work on)
 vim.operators = {
-    ["d"] = function(count, motion, motion_prefix, text_object)
-        if motion or (motion_prefix and text_object) then
-           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-           local doc = get_doc()
-           doc:set_selection(l1, c1, l2, c2)
-           -- TODO: we use same coordinates
-           yank()
-           delete()
-        else
-           -- TODO: delete here delete in visual we have selection
-           yank()
-           delete()
-        end
+
+  ["move"] = function(count, motion, motion_prefix, text_object)
+    local doc = get_doc()
+    if not doc then return end
+    local l1, c1, l2, c2
+    for _ = 1, count do
+      l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+    end
+    if not (l1 and c1 and l2 and c2) then
+      return
+    end
+    doc:set_selection(l1, c1, l1, c1)
+    center_selection_in_view(doc, l1, c1)
+  end,
+
+  ["select"] = function(_, motion, motion_prefix, text_object)
+    local doc = get_doc()
+    if not doc then return end
+    local endl, endc, startl, startc = doc:get_selection()
+    local l, c
+    -- if return equl pair then just movement
+    endl, endc, l, c = resolve_motion(motion, motion_prefix, text_object)
+    if not (endl == l and endc == c) then
+      startl = l
+      startc = c
+    end
+
+    if not (endl and endc and startl and startc) then
+      return
+    end
+    doc:set_selection(endl, endc, startl, startc)
+  end,
+
+
+  ["line_select"] = function(count, motion, motion_prefix, text_object)
+    local doc = get_doc()
+    if not doc then return end
+    local endl, endc, startl, startc = doc:get_selection() -- line already selected
+    endl, endc = resolve_motion(motion, motion_prefix, text_object)
+    if not (endl and endc and startl and startc) then
+      return
+    end
+
+    local text = doc.lines[endl]
+    if startl == endl then
+      if vim.dir > 0 then
+        startc = #text
+        endc = 1
+      elseif vim.dir < 0 then
+        startc = 1
+        endc = #text
+      else
+        -- pass
+      end
+    elseif startl > endl then
+      text = doc.lines[startl]
+      startc = #text
+      endc = 1
+    elseif startl < endl then
+      text = doc.lines[endl]
+      startc = 1
+      endc = #text
+    end
+    doc:set_selection(endl, endc, startl, startc)
+  end,
+
+  ["d"] = function(_, motion, motion_prefix, text_object)
+    if motion or (motion_prefix and text_object) then
+      local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+      local doc = get_doc()
+      if not doc then return end
+      doc:set_selection(l1, c1, l2, c2)
+    end
+    yank()
+    delete()
     vim.set_mode("normal") -- after y and p return to normal
-    end,
-    ["y"] = function(count, motion, motion_prefix, text_object)
-        if vim.mode == "o-pending" then
-           local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-           yank(l1, c1, l2, c2)
-        else
-           yank(nil, nil, nil, nil, 0.4) 
-        end
+  end,
+  ["y"] = function(_, motion, motion_prefix, text_object)
+    if vim.mode == "o-pending" then
+      local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+      yank(l1, c1, l2, c2)
+    else
+      yank(nil, nil, nil, nil, 0.4)
+    end
     vim.set_mode("normal")
-    end,
+  end,
   -- ["gu"]
   -- ["gU"]
   -- ["<"]
@@ -749,8 +737,6 @@ vim.operators = {
 }
 
 -- define motions ----------------------------------------------------
-local config = require "core.config"
-
 -- helper text objects
 local classify
 do
@@ -786,10 +772,10 @@ end
 local translations = {
   ["previous-char"]        = translate,
   ["next-char"]            = translate,
-  ["next-word-start"] = function(doc, line, col)
+  ["next-word-start"]      = function(doc, line, col)
     local char = doc:get_char(line, col)
     local ctype = classify(char)
-  
+
     while true do
       line, col = doc:position_offset(line, col, 1)
       local next_char = doc:get_char(line, col)
@@ -799,19 +785,19 @@ local translations = {
         break
       end
     end
-  
+
     while ctype == "space" do
       line, col = doc:position_offset(line, col, 1)
       local next_char = doc:get_char(line, col)
       ctype = classify(next_char)
     end
-  
+
     return line, col
   end,
   ["previous-word-start"]  = function(doc, line, col)
     local char = doc:get_char(line, col)
     local ctype = classify(char)
-  
+
     while true do
       line, col = doc:position_offset(line, col, -1)
       local next_char = doc:get_char(line, col)
@@ -821,32 +807,32 @@ local translations = {
         break
       end
     end
-  
+
     while ctype == "space" do
       line, col = doc:position_offset(line, col, -1)
       local next_char = doc:get_char(line, col)
       ctype = classify(next_char)
     end
-  
+
     return translate.start_of_word(doc, line, col)
   end,
-  ["start-of-word"] = function(doc, line, col)
+  ["start-of-word"]        = function(doc, line, col)
     local ctype = classify(doc:get_char(line, col))
     while true do
       local prev_line, prev_col = doc:position_offset(line, col, -1)
-      if prev_line == line and prev_col == col then break end 
+      if prev_line == line and prev_col == col then break end
       local prev_type = classify(doc:get_char(prev_line, prev_col))
       if prev_type ~= ctype then break end
       line, col = prev_line, prev_col
     end
     return line, col
   end,
-  
-  ["end-of-word"] = function(doc, line, col)
+
+  ["end-of-word"]          = function(doc, line, col)
     local ctype = classify(doc:get_char(line, col))
     while true do
       local next_line, next_col = doc:position_offset(line, col, 1)
-      if next_line == line and next_col == col then break end 
+      if next_line == line and next_col == col then break end
       local next_type = classify(doc:get_char(next_line, next_col))
       if next_type ~= ctype then break end
       line, col = next_line, next_col
@@ -873,55 +859,54 @@ local function get_translation(name)
   elseif obj then
     return obj[name:gsub("-", "_")]
   end
-  return nil
 end
 
 -- m: motions define the region operators act on
 vim.motions = {
   ["h"] = function(doc, l, c)
-        -- stop line start
-        if c == 1 then
-            return
-        end
+    -- stop line start
+    if c == 1 then
+      return
+    end
 
-        local new_l, new_c = doc:position_offset(l, c, -1) 
-        vim.max_col = new_c
-        vim.dir = 0
-        return new_l, new_c, new_l, new_c
-    end,
+    local new_l, new_c = doc:position_offset(l, c, -1)
+    vim.max_col = new_c
+    vim.dir = 0
+    return new_l, new_c, new_l, new_c
+  end,
 
   ["l"] = function(doc, l, c)
-        local line_text = doc.lines[l] or ""
+    local line_text = doc.lines[l] or ""
 
-        -- stop line end
-        if c > #line_text - 2 then
-            return
-        end
-        
-        local new_l, new_c = doc:position_offset(l, c, 1)
-        vim.max_col = new_c
-        vim.dir = 0
-        return new_l, new_c, new_l, new_c
-    end,
+    -- stop line end
+    if c > #line_text - 2 then
+      return
+    end
 
-  ["j"] = function(doc, l, c)
+    local new_l, new_c = doc:position_offset(l, c, 1)
+    vim.max_col = new_c
+    vim.dir = 0
+    return new_l, new_c, new_l, new_c
+  end,
+
+  ["j"] = function(_, l, _)
     -- down
     vim.dir = -1
-    return l+1, vim.max_col, l+1 , vim.max_col
-    end,
+    return l + 1, vim.max_col, l + 1, vim.max_col
+  end,
 
-  ["k"] = function(doc, l, c)
+  ["k"] = function(_, l, _)
     -- up
     vim.dir = 1
-    return l-1, vim.max_col, l-1 , vim.max_col
-    end,
+    return l - 1, vim.max_col, l - 1, vim.max_col
+  end,
 
   ["w"] = function(doc, l, c)
-        local l2, c2 = l, c
-        local next_word_start = get_translation("next-word-start")
-        l2, c2 = next_word_start(doc, l, c)
-        return l2, c2, l2, c2
-    end,
+    local l2, c2 = l, c
+    local next_word_start = get_translation("next-word-start")
+    l2, c2 = next_word_start(doc, l, c)
+    return l2, c2, l2, c2
+  end,
   ["b"] = function(doc, l, c)
     local previous_word_start = get_translation("previous-word-start")
     l, c = previous_word_start(doc, l, c)
@@ -957,11 +942,11 @@ vim.motions = {
 
   ["gg"] = function(doc, l, c)
     local line
-    if get_count() > 1 then 
+    if get_count() > 1 then
       line = get_count()
     else
       line = 1
-    end 
+    end
     return line, 1, line, 1
   end,
 
@@ -971,7 +956,7 @@ vim.motions = {
     return last_line, last_col, last_line, last_col
   end,
 
-  ["d"] = function (doc, l, c)
+  ["d"] = function(doc, l, c)
     return l, 1, l, #doc.lines[l]
   end,
 }
@@ -981,13 +966,14 @@ vim.normal_keys = {
   [":"] = function() end,
   ["/"] = function() end,
   ["?"] = function() end,
-  ["*"] = function() 
-      local doc = get_doc()
-      local l, c = doc:get_selection()
-      local start_l, start_c = get_translation("start-of-word")(doc, l, c)
-      local end_l, end_c = get_translation("end-of-word")(doc, l, c)
-      local query = get_text(end_l, end_c, start_l, start_c)
-      vim.forward_search(query)
+  ["*"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()
+    local start_l, start_c = get_translation("start-of-word")(doc, l, c)
+    local end_l, end_c = get_translation("end-of-word")(doc, l, c)
+    local query = get_text(end_l, end_c, start_l, start_c)
+    vim.forward_search(query)
   end,
   ["i"] = function()
     vim.set_mode("insert")
@@ -996,123 +982,128 @@ vim.normal_keys = {
     vim.set_mode("visual")
   end,
   ["V"] = function(count, motion)
-      vim.set_mode("visual-line")
+    vim.set_mode("visual-line")
   end,
   ["u"] = function()
     local doc = get_doc()
+    if not doc then return end
     doc:undo()
     echo("undo")
   end,
   ["o"] = function()
-      local doc = get_doc()
-      local l = doc:get_selection()
-      doc:set_selection(l+1, 1)
-      vim.set_mode("insert")
-      doc:insert(l+1, 1, "\n")
+    local doc = get_doc()
+    if not doc then return end
+    local l = doc:get_selection()
+    doc:set_selection(l + 1, 1)
+    vim.set_mode("insert")
+    doc:insert(l + 1, 1, "\n")
   end,
   ["O"] = function()
-      local doc = get_doc()
-      local l = doc:get_selection()
-      vim.set_mode("insert")
-      doc:insert(l, 1, "\n")
+    local doc = get_doc()
+    if not doc then return end
+    local l = doc:get_selection()
+    vim.set_mode("insert")
+    doc:insert(l, 1, "\n")
   end,
-  ["p"] = function(count)
-      -- TODO: use count for loop
-      put("down")
-      vim.set_mode("normal")
+  ["p"] = function(_)
+    -- TODO: use count for loop
+    put("down")
+    vim.set_mode("normal")
   end,
-  ["P"] = function(count)
-      -- TODO: use count for loop
-      put("up")
-      vim.set_mode("normal")
+  ["P"] = function(_)
+    -- TODO: use count for loop
+    put("up")
+    vim.set_mode("normal")
   end,
-  ["n"] = function(count)
-      vim.forward_search(vim.search_query)
+  ["n"] = function(_)
+    vim.forward_search(vim.search_query)
   end,
-  ["N"] = function(count)
-      vim.backward_search(vim.search_query)
+  ["N"] = function(_)
+    vim.backward_search(vim.search_query)
   end,
 }
 
 -- Visula mode keymap
 vim.visual_keys = {
-  ["V"] = function(count, motion)
-      vim.set_mode("visual-line")
+  ["V"] = function(_, _)
+    vim.set_mode("visual-line")
   end,
-  ["p"] = function(count)
-      put("down")
-      vim.set_mode("normal")
+  ["p"] = function(_)
+    put("down")
+    vim.set_mode("normal")
   end,
-  ["*"] = function() 
-      local doc = get_doc()
-      local end_l, end_c, start_l, start_c = doc:get_selection()
-      local query = get_text(end_l, end_c, start_l, start_c)
-      vim.forward_search(query)
+  ["*"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local end_l, end_c, start_l, start_c = doc:get_selection()
+    local query = get_text(end_l, end_c, start_l, start_c)
+    vim.forward_search(query)
   end,
 
- ["#"] = function() 
-      local doc = get_doc()
-      local l, c, oldl, oldc = doc:get_selection()
-      core.log("selection: %s %s %s %s", l, c, oldl, oldc)
-      core.log("text: %s", get_text(l, c, oldl, oldc))
-      core.log("line length: %s", #doc.lines[l])
-      yank(l, c, oldl, oldc)
-      local reg = vim.registers['"'] or { text = "", type = "char" }
-      local text = reg.text or ""
-      core.log("yanked text: %s", text)
-      core.log("yanked type: %s", reg.type)
-      core.log("yanked text length: %s", #text)
-      delete(l, c, oldl, oldc)
+  ["#"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, c, oldl, oldc = doc:get_selection()
+    core.log("selection: %s %s %s %s", l, c, oldl, oldc)
+    core.log("text: %s", get_text(l, c, oldl, oldc))
+    core.log("line length: %s", #doc.lines[l])
+    yank(l, c, oldl, oldc)
+    local reg = vim.registers['"'] or { text = "", type = "char" }
+    local text = reg.text or ""
+    core.log("yanked text: %s", text)
+    core.log("yanked type: %s", reg.type)
+    core.log("yanked text length: %s", #text)
+    delete(l, c, oldl, oldc)
   end,
 }
 
 -- command to launch the command line
 vim.normal_keys[":"] = function()
-  vim.set_mode("command")        
-  instance_command:start_command{
+  vim.set_mode("command")
+  instance_command:start_command {
     submit = function(input)
       vim.run_command(input)
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end,
     suggest = function(input)
       return vim.get_suggests(input)
     end,
     cancel = function()
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end
   }
 end
 
 -- command to launch the search line
 vim.normal_keys["/"] = function()
-  vim.set_mode("command")        
-  forward_search:start_command{
+  vim.set_mode("command")
+  forward_search:start_command {
     submit = function(input)
       vim.forward_search(input) -- jump to first occurance
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end,
-    suggest = function(input)
+    suggest = function(_)
       return "" -- highlights user input, kind of suggests
     end,
     cancel = function()
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end
   }
 end
 
 -- command to launch the search line
 vim.normal_keys["?"] = function()
-  vim.set_mode("command")        
-  backward_search:start_command{
+  vim.set_mode("command")
+  backward_search:start_command {
     submit = function(input)
       vim.backward_search(input) -- jump to first occurance
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end,
-    suggest = function(input)
+    suggest = function(_)
       return "" -- highlights user input, kind of suggests
     end,
     cancel = function()
-      vim.set_mode("normal")     
+      vim.set_mode("normal")
     end
   }
 end
@@ -1122,17 +1113,16 @@ get_region = function(l1, c1, motion_prefix, text_object)
   local doc = get_doc()
   local l2, c2
   if text_object == "w" then
-    local l2, c2 = translations["start-of-word"](doc, l1, c1)
-    local l1, c1 = translations["end-of-word"](doc, l1, c1)
+    l2, c2 = translations["start-of-word"](doc, l1, c1)
+    l1, c1 = translations["end-of-word"](doc, l1, c1)
     if motion_prefix == "i" then
       return l1, c1, l2, c2
     elseif motion_prefix == "a" then
-      return l1, c1 + 1, l2, c2 - 1 
+      return l1, c1 + 1, l2, c2 - 1
     end
-
   elseif text_object == "s" then
   elseif text_object == "p" then
-  -- TODO: else between quotes and parenthesis
+    -- TODO: else between quotes and parenthesis
   end
 end
 
@@ -1143,7 +1133,7 @@ function DocView:draw_line_body(line, x, y)
   local draw_highlight = false
   local hcl = config.highlight_current_line
   if hcl ~= false then
-    for lidx, line1, col1, line2, col2 in self.doc:get_selections(false) do
+    for _, line1, col1, line2, col2 in self.doc:get_selections(false) do
       if line1 == line then
         if hcl == "no_selection" then
           if (line1 ~= line2) or (col1 ~= col2) then
@@ -1162,7 +1152,7 @@ function DocView:draw_line_body(line, x, y)
 
   -- draw selection if it overlaps this line (end made inclusive)
   local lh = self:get_line_height()
-  for lidx, line1, col1, line2, col2 in self.doc:get_selections(true) do
+  for _, line1, col1, line2, col2 in self.doc:get_selections(true) do
     if line >= line1 and line <= line2 then
       local text = self.doc.lines[line] or ""
       local s = (line == line1) and col1 or 1
@@ -1194,3 +1184,4 @@ end
 vim.set_mode("normal")
 
 return vim
+
