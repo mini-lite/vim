@@ -3,14 +3,17 @@
 -- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
+-- TODO: put does not make selection at the end in multiple lines
+
 -- FEATURES ------------------------------------------------------------------
 
--- TODO: copy path of the current file in clipboard
--- TODO: put can handle clipboard , add a config that allows vim system to use clipboard
+-- TODO: implement % to match brackets 
+-- TODO: implement jumps (marks), and must be able to record buffers too. another plugin
+         -- implement my marker
 -- TODO: add second count to implement something like 3d2k
 -- TODO: follow delete() naming and reduce noise adopt short naming
+-- TODO: add mechanisms to use registers, yank and put can accept register argument
 
--- TODO: implement ctrl+o and ctrl+O
 -- TODO: it must be under 1000 lines of code
 -- TODO: shift is still selecting in normal disable it, either disable this or support it
 -- TODO: normal mode is working outside doc view, to benifit from : command line outside
@@ -23,6 +26,9 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: yy yank a line
+-- DONE: put can handle clipboard , add a config that allows vim system to use clipboard
+-- DONE: copy path of the current file in clipboard
 -- DONE: start pomping a command parser, user can add custom commands
 -- DONE: delete multiple lines throws selection below we should stay on top
 -- DONE: check unused variables, enable lsp and reformat code
@@ -90,10 +96,12 @@ local search = require "core.doc.search"
 -- vim plugin defaults
 ---@class VimConfig
 ---@field unified_search boolean
+---@field unnamedplus boolean
 ---@class core.config
 ---@field vim VimConfig
 config.vim = {
   unified_search = true,
+  unnamedplus = true,
 }
 
 -- m: forward definitions
@@ -142,7 +150,14 @@ end
 
 local vim = {
   mode = "normal", -- normal, visual, command, insert, delete
-  registers = { ['"'] = "" },
+  registers = { ['"'] = "",  -- unnamed register
+                ['0'] = "",  -- yank register
+                ['1'] = "",  -- last delete
+                ['+'] = "",  -- system clipboard
+                ['*'] = ""   -- primary selection (linux)
+                -- "% : abs_filename
+                -- "/ : last search query (vim.search_query)
+  },
   command_buffer = "",
   search_query = "",
   command_map = {},
@@ -541,6 +556,21 @@ local function flash(l1, c1, l2, c2, color, time, doc)
   end)
 end
 
+local function y_type(doc, text, l1, c1, l2, c2)
+  local line_width = 0
+  if l1 == l2 then -- single line case
+    line_width = #doc.lines[l1]
+    if #text == line_width then
+       return "line"
+    end
+  else
+    if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
+      return "line"
+    end
+  end
+  return "char"
+end
+
 -- m: yank()
 local function yank(l1, c1, l2, c2, flash_time)
   local ft = flash_time or 0
@@ -551,21 +581,19 @@ local function yank(l1, c1, l2, c2, flash_time)
     l1, c1, l2, c2 = doc:get_selection()
   end
   local yank_type = "char"
-  local line_width = 0
   local text = get_text(l1, c1, l2, c2)
+  if not text then return end
+  yank_type = y_type(doc, text, l1, c1, l2, c2)
 
-  if l1 == l2 then -- single line case
-    line_width = #doc.lines[l1]
-    if #text == line_width then
-      yank_type = "line"
-    end
-  else
-    if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
-      yank_type = "line"
-    end
+  -- update registers
+  if config.vim.unnamedplus then
+    system.set_clipboard(text)
+    vim.registers['+'] = { text = text, type = yank_type } -- clipboard does not have metadata
   end
-
   vim.registers['"'] = { text = text, type = yank_type }
+
+  -- only when yank
+  vim.registers['0'] = { text = text, type = yank_type }
 
   if ft ~= 0 then
     flash(l1, c1, l2, c2, flash_color, ft, doc)
@@ -579,24 +607,35 @@ local function delete(el, ec, sl, sc)
   if not (el and ec and sl and sc) then
     el, ec, sl, sc = doc:get_selection()
   end
+  local reg_text = get_text(sl, sc, el, ec)
+  if not reg_text then return end
+  local yank_type = y_type(doc, reg_text, sl, sc, el, ec)
+  local text = ""
+
   if el == sl then
-    local text = doc.lines[el]
+    text = doc.lines[el]
     if ec >= sc then
       if ec == #text then el, ec = el + 1, 1 else ec = ec + 1 end
     else
       if sc == #text then sl, sc = sl + 1, 1 else sc = sc + 1 end
     end
   elseif el > sl then
-    local text = doc.lines[el]
+    text = doc.lines[el]
     if ec == #text then el, ec = el + 1, 1 else ec = ec + 1 end
   else
-    local text = doc.lines[sl]
+    text = doc.lines[sl]
     if sc == #text then sl, sc = sl + 1, 1 else sc = sc + 1 end
   end
   -- TODO: do i need this part ?
   if sl > el or (sl == el and sc > ec) then
     sl, el, sc, ec = el, sl, ec, sc
   end
+  if config.vim.unnamedplus then
+     system.set_clipboard(text)
+     vim.registers['+'] = { text = reg_text, type = yank_type }
+  end
+  vim.registers['"'] = { text = reg_text, type = yank_type }
+  vim.registers['1'] = { text = reg_text, type = yank_type }
   doc:remove(sl, sc, el, ec)
 end
 
@@ -605,14 +644,25 @@ local function put(direction, count)
   count = count or 1
   local doc = get_doc()
   if not doc then return end
-
-  local l, c = doc:get_selection()
-  local reg = vim.registers['"'] or { text = "", type = "char" }
-  local yank_type = reg.type or "char"
-  local text = reg.text or ""
   local flash_time = 0.2
   local flash_color = style.selection
+
+  local l, c = doc:get_selection()
+
+  local reg = vim.registers['"'] or { text = "", type = "char" }
+  local yank_type = reg.type or "char"
+
+  if config.vim.unnamedplus then
+     reg = { text = system.get_clipboard(), type = "char" }
+     if vim.registers['+'].text == reg.text then
+        yank_type = vim.registers['+'].type
+     else
+        vim.registers['+'] = reg
+     end
+  end
+
   if not reg.text then return end
+  local text = reg.text or ""
 
   if direction ~= "up" then
     direction = "down"
@@ -748,14 +798,13 @@ vim.operators = {
       if not doc then return end
       doc:set_selection(l1, c1, l2, c2)
     end
-    yank()
     delete()
     vim.set_mode("normal") -- after y and p return to normal
   end,
   ["y"] = function(_, motion, motion_prefix, text_object)
-    if vim.mode == "o-pending" then
+    if motion or (motion_prefix and text_object) then
       local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-      yank(l1, c1, l2, c2)
+      yank(l1, c1, l2, c2, 0.4)
     else
       yank(nil, nil, nil, nil, 0.4)
     end
@@ -953,26 +1002,26 @@ vim.motions = {
     return l, c, l, c
   end,
 
-  ["0"] = function(doc, l, c)
+  ["0"] = function(doc, _, _)
     local line, _ = doc:get_selection()
     return line, 1, line, 1
   end,
 
-  ["^"] = function(doc, l, c)
+  ["^"] = function(doc, _, _)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local first_non_ws = text:find("%S") or 1
     return line, first_non_ws, line, first_non_ws
   end,
 
-  ["$"] = function(doc, l, c)
+  ["$"] = function(doc, _, _)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local last_col = #text + 1
     return line, last_col, line, last_col
   end,
 
-  ["gg"] = function(doc, l, c)
+  ["gg"] = function(_, _, _)
     local line
     if get_count() > 1 then
       line = get_count()
@@ -982,13 +1031,17 @@ vim.motions = {
     return line, 1, line, 1
   end,
 
-  ["G"] = function(doc, l, c)
+  ["G"] = function(doc, _, _)
     local last_line = #doc.lines
     local last_col = #(doc.lines[last_line] or "") + 1
     return last_line, last_col, last_line, last_col
   end,
 
-  ["d"] = function(doc, l, c)
+  ["d"] = function(doc, l, _)
+    return l, 1, l, #doc.lines[l]
+  end,
+
+  ["y"] = function(doc, l, _)
     return l, 1, l, #doc.lines[l]
   end,
 }
@@ -1013,7 +1066,7 @@ vim.normal_keys = {
   ["v"] = function()
     vim.set_mode("visual")
   end,
-  ["V"] = function(count, motion)
+  ["V"] = function(_, _)
     vim.set_mode("visual-line")
   end,
   ["u"] = function()
@@ -1038,12 +1091,10 @@ vim.normal_keys = {
     doc:insert(l, 1, "\n")
   end,
   ["p"] = function(_)
-    -- TODO: use count for loop
     put("down")
     vim.set_mode("normal")
   end,
   ["P"] = function(_)
-    -- TODO: use count for loop
     put("up")
     vim.set_mode("normal")
   end,
