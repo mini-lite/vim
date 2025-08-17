@@ -3,14 +3,13 @@
 -- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
--- TODO: delete multiple lines throws selection below we should stay on top
-
 -- FEATURES ------------------------------------------------------------------
 
+-- TODO: copy path of the current file in clipboard
 -- TODO: put can handle clipboard , add a config that allows vim system to use clipboard
 -- TODO: add second count to implement something like 3d2k
 -- TODO: follow delete() naming and reduce noise adopt short naming
--- TODO: start pomping a command parser
+
 -- TODO: implement ctrl+o and ctrl+O
 -- TODO: it must be under 1000 lines of code
 -- TODO: shift is still selecting in normal disable it, either disable this or support it
@@ -24,6 +23,8 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: start pomping a command parser, user can add custom commands
+-- DONE: delete multiple lines throws selection below we should stay on top
 -- DONE: check unused variables, enable lsp and reformat code
 -- DONE: we are moving to center even if visible when clicking $
 -- DONE: add default operators to vim operators
@@ -397,7 +398,6 @@ function vim.set_mode(m)
     message = {
       style.text, "-- VISUAL --",
     }
-
     command_line.show_message(message, 0) -- 0 = permanent
   elseif m == "visual-line" then
     local doc = get_doc()
@@ -420,20 +420,49 @@ function vim.set_mode(m)
   vim.mode = m
 end
 
+-- default ex commands
 local vim_ex_commands = {
-  ["w"]  = { action = "doc:save", desc = "Save file" },
-  ["q"]  = { action = "core:quit", desc = "Quit editor" },
-  ["q!"] = { action = "core:force-quit", desc = "Force quit" },
-  ["qa"] = { action = "core:quit", desc = "Quit all" },
-  ["e!"] = { action = "doc:reload", desc = "reload fresh" }
+  ["w"]    = { action = "doc:save", desc = "Save file" },
+  ["q"]    = { action = "core:quit", desc = "Quit editor" },
+  ["q!"]   = { action = "core:force-quit", desc = "Force quit" },
+  ["qa"]   = { action = "core:quit", desc = "Quit all" },
+  ["e!"]   = { action = "doc:reload", desc = "Reload fresh" },
+  ["bd"]   = { action = "root:close", desc = "Delete buffer" },
+  ["path"] = { -- test
+    action = function()
+      local doc = get_doc()
+      if not doc then
+        return
+      end
+      local filepath = doc.abs_filename
+      system.set_clipboard(filepath)
+      echo("%s", filepath)
+    end,
+    desc = "Retrieve File Path"
+  },
 }
 
-function vim.run_command(cmd)
+-- vim.register_command("greet", function(name) core.log("Hello, " .. (name or "world") .. "!") end, "Greet someone")
+function vim.register_command(cmd, action, desc)
+  if not cmd or not action then
+    core.log("invalid command registration")
+    return
+  end
+  vim_ex_commands[cmd] = { action = action, desc = desc or "" }
+end
+
+-- run command with optional arguments
+function vim.run_command(cmd, ...)
   local entry = vim_ex_commands[cmd]
-  if entry then
-    command.perform(entry.action)
-  else
+  if not entry then
     core.log("vim unknown command: " .. cmd)
+    return
+  end
+
+  if type(entry.action) == "function" then
+    entry.action(...)
+  else
+    command.perform(entry.action, ...)
   end
 end
 
@@ -538,7 +567,9 @@ local function yank(l1, c1, l2, c2, flash_time)
 
   vim.registers['"'] = { text = text, type = yank_type }
 
-  flash(l1, c1, l2, c2, flash_color, ft, doc)
+  if ft ~= 0 then
+    flash(l1, c1, l2, c2, flash_color, ft, doc)
+  end
 end
 
 -- m: delete()
@@ -562,6 +593,7 @@ local function delete(el, ec, sl, sc)
     local text = doc.lines[sl]
     if sc == #text then sl, sc = sl + 1, 1 else sc = sc + 1 end
   end
+  -- TODO: do i need this part ?
   if sl > el or (sl == el and sc > ec) then
     sl, el, sc, ec = el, sl, ec, sc
   end
@@ -655,7 +687,7 @@ vim.operators = {
       return
     end
     doc:set_selection(l1, c1, l1, c1)
-    center_selection_in_view(doc, l1, c1)
+    center_selection_in_view(doc, l1)
   end,
 
   ["select"] = function(_, motion, motion_prefix, text_object)
@@ -677,7 +709,7 @@ vim.operators = {
   end,
 
 
-  ["line_select"] = function(count, motion, motion_prefix, text_object)
+  ["line_select"] = function(_, motion, motion_prefix, text_object)
     local doc = get_doc()
     if not doc then return end
     local endl, endc, startl, startc = doc:get_selection() -- line already selected
