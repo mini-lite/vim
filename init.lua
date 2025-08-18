@@ -1,18 +1,19 @@
 -- Author: S.Ghamri
 
--- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
--- FIX: vi{ includes last } if first char on line 
+-- FIX: vi{ includes last } if first char on line
 -- FIX: clean i and a, maybe they can become translations since same arguments
 
 -- FEATURES ------------------------------------------------------------------
 
--- TODO: enable f and F motion to jump to next character (translation)
 -- TODO: clean code before becoming unmaintable (KISS)
+-- TODO: Ctrl-r redo
+-- TODO: . think about how to implement repeat last change
+-- TODO: r replace single character. next key goes in place of selected char
+-- TODO: ~ toggle case of the current char
 
 -- TODO: add second count to implement something like 3d2k
--- TODO: enable x and X  and s and S a single character deletion
 -- TODO: follow delete() naming and reduce noise adopt short naming
 -- TODO: add mechanisms to use registers, yank and put can accept register argument
 
@@ -28,6 +29,8 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: enable x and X  and s and S a single character deletion
+-- DONE: enable f and F motion to jump to next character (translation)
 -- DONE: implement % to match brackets
 -- DONE: put does not make selection at the end in multiple lines
 -- DONE: yy yank a line
@@ -73,9 +76,6 @@
 -- DONE: copy is adding new lines
 -- DONE: enhance visual line mode
 -- DONE: correct cursor on selection problem, override all doc view related functions
--- selection region adapted
--- make sure yank is correct
--- put should be correct too
 -- DONE: yanking shows flash of region change color to intense
 -- DONE: visual select does not start from current char
 -- DONE: enable yank and put
@@ -109,10 +109,10 @@ config.vim = {
 }
 
 -- m: forward definitions
+local get_translation
 local resolve_motion
 local get_region
 local find_match
-local find_char
 
 -- m: require
 local command_line = require "plugins.command-line"
@@ -126,7 +126,7 @@ local function echo(fmt, ...)
   command_line.show_message({ text }, 1)
 end
 
--- TODO: rework this part I am not sure
+-- TODO: rework this part I am not sure. is the width correct
 local base_caret_width = 10
 local function update_caret_width()
   local scale = 1
@@ -250,7 +250,7 @@ local prev_dig = false
 -- m: input_handler
 local function handle_input(key)
   if vim.mode == "insert" or vim.mode == "command" then
-    return false
+    return false -- release input
   end
 
   -- pending too long, reset
@@ -267,24 +267,28 @@ local function handle_input(key)
     return true
   end
 
-  pending = pending .. key -- by now all numbers are filered
+  pending = pending .. key -- by now all numbers are filtred
   prev_dig = false         -- other key then digit is pressed
+
   if vim.mode == "normal" then
-    state.operator = vim.operators["move"]
+    state.operator = vim.operators["move"] -- default normal mode operator
 
-    -- normal key like i and v
-    if vim.normal_keys and vim.normal_keys[key] then
-      vim.normal_keys[key]()
-      pending = ""
-      reset_state()
-      return true
-    end
+    -- we have composite motion
+    if not (#pending == 2 and pending:sub(1, 1):match("[fFtT]")) then
+      -- normal key like i and v but we are not in middle of motion
+      if vim.normal_keys and vim.normal_keys[key] then
+        vim.normal_keys[key]()
+        pending = ""
+        reset_state()
+        return true
+      end
 
-    if vim.normal_keys and vim.normal_keys[pending] then
-      vim.normal_keys[pending]()
-      pending = ""
-      reset_state()
-      return true
+      if vim.normal_keys and vim.normal_keys[pending] then
+        vim.normal_keys[pending]()
+        pending = ""
+        reset_state()
+        return true
+      end
     end
   elseif vim.mode == "visual" or vim.mode == "visual-line" then
     if vim.visual_keys and vim.visual_keys[key] then
@@ -329,8 +333,8 @@ local function handle_input(key)
   end
 
   -- 3. pending with prefix i or a
-  if #pending == 2 and (pending:sub(1, 1) == "i" or pending:sub(1, 1) == "a") then
-    state.motion_prefix = pending:sub(1, 1) -- 'i' or 'a'
+  if #pending == 2 and pending:sub(1, 1):match("[iafFtT]") then
+    state.motion_prefix = pending:sub(1, 1)
     state.text_object = pending:sub(2, 2)
 
     if state.motion_prefix and state.text_object then
@@ -633,10 +637,12 @@ local function delete(el, ec, sl, sc)
     text = doc.lines[sl]
     if sc == #text then sl, sc = sl + 1, 1 else sc = sc + 1 end
   end
+
   -- TODO: do i need this part ?
   if sl > el or (sl == el and sc > ec) then
     sl, el, sc, ec = el, sl, ec, sc
   end
+
   if config.vim.unnamedplus then
     system.set_clipboard(reg_text)
     vim.registers['+'] = { text = reg_text, type = yank_type }
@@ -719,7 +725,15 @@ resolve_motion = function(motion, motion_prefix, text_object)
   local l2, c2 = doc:get_selection()
 
   if motion_prefix and text_object then
-    return get_region(l2, c2, motion_prefix, text_object)
+    if motion_prefix == "a" or motion_prefix == "i" then
+      return get_region(l2, c2, motion_prefix, text_object)
+    elseif motion_prefix == "f" or motion_prefix == "F" then
+      core.log("%s %s", motion_prefix, text_object)
+      local this_char = get_translation("this-char")
+      local dir = motion_prefix == "f" and 1 or -1
+      local l1, c1 = this_char(doc, l2, c2, text_object, dir)
+      return l1, c1, l2, c2
+    end
   end
 
   if motion and type(motion) == "function" then
@@ -938,9 +952,20 @@ local translations = {
   ["previous-page"]        = DocView.translate,
   ["next-block-end"]       = translate,
   ["previous-block-start"] = translate,
+  ["this-char"]            = function(doc, l, c, ch, dir)
+    if not ch then
+      ch = doc:get_char(l, c)
+    end
+    while true do
+      local nl, nc = doc:position_offset(l, c, dir)
+      if nl == l and nc == c then return end
+      l, c = nl, nc
+      if (doc.lines[l] or ""):sub(c, c) == ch then return l, c end
+    end
+  end,
 }
 
-local function get_translation(name)
+get_translation = function(name)
   local obj = translations[name]
   if type(obj) == "function" then
     return obj
@@ -1117,6 +1142,32 @@ vim.normal_keys = {
   ["N"] = function(_)
     vim.backward_search(vim.search_query)
   end,
+  ["s"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()
+    delete(l, c, l, c)
+    vim.set_mode("insert")
+  end,
+  ["S"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, _ = doc:get_seletion()
+    delete(l, 1, l, #doc.lines[l] - 1) -- do not delete newline
+    vim.set_mode("insert")
+  end,
+  ["x"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()
+    delete(l, c, l, c)
+  end,
+  ["X"] = function()
+    local doc = get_doc()
+    if not doc then return end
+    local l, c = doc:get_selection()
+    delete(l, c-1, l, c-1)
+  end,
 }
 
 -- Visula mode keymap
@@ -1211,65 +1262,57 @@ local closing = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
 get_region = function(l1, c1, motion_prefix, text_object)
   local doc = get_doc()
   local l2, c2
-  if text_object == "w" then
-    l2, c2 = translations["start-of-word"](doc, l1, c1)
-    l1, c1 = translations["end-of-word"](doc, l1, c1)
-    if motion_prefix == "i" then
-      return l1, c1, l2, c2
-    elseif motion_prefix == "a" then
-      return l1, c1 + 1, l2, c2 - 1
+
+  if motion_prefix == "i" or motion_prefix == "a" then
+    if text_object == "w" then
+      l2, c2 = translations["start-of-word"](doc, l1, c1)
+      l1, c1 = translations["end-of-word"](doc, l1, c1)
+      if motion_prefix == "i" then
+        return l1, c1, l2, c2
+      elseif motion_prefix == "a" then
+        return l1, c1 + 1, l2, c2 - 1
+      end
+    elseif text_object == "s" then
+      --
+    elseif text_object == "p" then
+      --
+    elseif pairs[text_object] then
+      -- TODO: edge case on the bracket
+      local l, c = l1, c1
+      local this_char = get_translation("this-char")
+      l2, c2 = this_char(doc, l1, c1, text_object, -1)
+      l1, c1 = find_match(doc, l2, c2)
+
+      -- check inside pairs
+      if not (l2 < l or (l2 == l and c2 < c)) or
+          not (l1 > l or (l1 == l and c1 > c)) then
+        return
+      end
+
+      if motion_prefix == "i" then
+        return l1, c1 - 1, l2, c2 + 1
+      elseif motion_prefix == "a" then
+        return l1, c1, l2, c2
+      end
+    elseif closing[text_object] then
+      -- TODO: edge case on the bracket
+      local l, c = l1, c1
+      local this_char = get_translation("this-char")
+      l1, c1 = this_char(doc, l1, c1, text_object, 1)
+      l2, c2 = find_match(doc, l1, c1)
+
+      -- check inside pairs
+      if not (l2 < l or (l2 == l and c2 < c)) or
+          not (l1 > l or (l1 == l and c1 > c)) then
+        return
+      end
+
+      if motion_prefix == "i" then
+        return l1, c1 - 1, l2, c2 + 1
+      elseif motion_prefix == "a" then
+        return l1, c1, l2, c2
+      end
     end
-  elseif text_object == "s" then
-    --
-  elseif text_object == "p" then
-    --
-  elseif pairs[text_object] then
-    -- TODO: edge case on the bracket
-    local l, c = l1, c1
-    l2, c2 = find_char(doc, l1, c1, text_object, -1)
-    l1, c1 = find_match(doc, l2, c2)
-
-    -- check inside pairs
-    if not (l2 < l or (l2 == l and c2 < c)) or
-     not (l1 > l or (l1 == l and c1 > c)) then
-      return
-    end
-
-    if motion_prefix == "i" then
-      return l1, c1-1, l2, c2+1
-    elseif motion_prefix == "a" then
-      return l1, c1, l2, c2
-    end
-
-  elseif closing[text_object] then
-    -- TODO: edge case on the bracket
-    local l, c = l1, c1
-    l1, c1 = find_char(doc, l1, c1, text_object, 1)
-    l2, c2 = find_match(doc, l1, c1)
-
-    -- check inside pairs
-    if not (l2 < l or (l2 == l and c2 < c)) or
-     not (l1 > l or (l1 == l and c1 > c)) then
-      return
-    end
-
-    if motion_prefix == "i" then
-      return l1, c1-1, l2, c2+1
-    elseif motion_prefix == "a" then
-      return l1, c1, l2, c2
-    end
-
-  end
-end
-
--- find char in both directions
--- TODO: this can be a translations
-find_char = function(doc, l, c, ch, dir)
-  while true do
-    local nl, nc = doc:position_offset(l, c, dir)
-    if nl == l and nc == c then return end
-    l, c = nl, nc
-    if (doc.lines[l] or ""):sub(c, c) == ch then return l, c end
   end
 end
 
@@ -1285,7 +1328,8 @@ find_match = function(doc, line, col)
   local open, close = dir == 1 and pairs or closing, dir == 1 and closing or pairs
 
   for l = line, dir == 1 and #doc.lines or 1, dir do
-    local start, stop, step = l == line and col + dir or (dir == 1 and 1 or #doc.lines[l]), dir == 1 and #doc.lines[l] or
+    local start, stop, step = l == line and col + dir or (dir == 1 and 1 or #doc.lines[l]),
+        dir == 1 and #doc.lines[l] or
         1, dir
     for c = start, stop, step do
       local ch = doc.lines[l]:sub(c, c)
@@ -1295,7 +1339,6 @@ find_match = function(doc, line, col)
         if depth > 0 then
           depth = depth - 1
         elseif ch == match then
-          echo(" %s %s ", l, c)
           return l, c
         end
       end
