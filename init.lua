@@ -4,9 +4,11 @@
 
 -- FIX: vi{ includes last } if first char on line
 -- FIX: clean i and a, maybe they can become translations since same arguments
+-- FIX: more tests to the inner and around scenarios
 
 -- FEATURES ------------------------------------------------------------------
 
+-- TODO: update README
 -- TODO: clean code before becoming unmaintable (KISS)
 -- TODO: Ctrl-r redo
 -- TODO: . think about how to implement repeat last change
@@ -454,7 +456,7 @@ local vim_ex_commands = {
   ["qa"]   = { action = "core:quit", desc = "Quit all" },
   ["e!"]   = { action = "doc:reload", desc = "Reload fresh" },
   ["bd"]   = { action = "root:close", desc = "Delete buffer" },
-  ["path"] = { -- test
+  ["path"] = {
     action = function()
       local doc = get_doc()
       if not doc then
@@ -1255,8 +1257,8 @@ vim.normal_keys["?"] = function()
   }
 end
 
-local pairs = { ["("] = ")", ["["] = "]", ["{"] = "}" }
-local closing = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
+local pairs = { ["("] = ")", ["["] = "]", ["{"] = "}"}
+local closing = { [")"] = "(", ["]"] = "[", ["}"] = "{"}
 
 -- m: get region
 get_region = function(l1, c1, motion_prefix, text_object)
@@ -1312,6 +1314,19 @@ get_region = function(l1, c1, motion_prefix, text_object)
       elseif motion_prefix == "a" then
         return l1, c1, l2, c2
       end
+    -- "text" and "text"
+    elseif text_object == '"' or text_object == "'" then
+      local this_char = get_translation("this-char")
+      l1, c1 = this_char(doc, l1, c1, text_object, 1)
+      l2, c2 = this_char(doc, l1, c1, text_object, -1)
+
+      if motion_prefix == "i" then
+        return l1, c1 - 1, l2, c2 + 1
+      elseif motion_prefix == "a" then
+        return l1, c1, l2, c2
+      end
+
+      return l1, c1, l2, c2
     end
   end
 end
