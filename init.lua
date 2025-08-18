@@ -5,9 +5,11 @@
 
 -- FEATURES ------------------------------------------------------------------
 
--- ONGOING: implement % to match brackets 
+-- ONGOING: implement % to match brackets
+-- TODO: enable f and F motion to jump to next character
 
 -- TODO: add second count to implement something like 3d2k
+-- TODO: enable x and X  and s and S a single character deletion
 -- TODO: follow delete() naming and reduce noise adopt short naming
 -- TODO: add mechanisms to use registers, yank and put can accept register argument
 
@@ -105,6 +107,7 @@ config.vim = {
 -- m: forward definitions
 local resolve_motion
 local get_region
+local find_match
 
 -- m: require
 local command_line = require "plugins.command-line"
@@ -147,14 +150,15 @@ local function center_selection_in_view(_, line)
 end
 
 local vim = {
-  mode = "normal", -- normal, visual, command, insert, delete
-  registers = { ['"'] = "",  -- unnamed register
-                ['0'] = "",  -- yank register
-                ['1'] = "",  -- last delete
-                ['+'] = "",  -- system clipboard
-                ['*'] = ""   -- primary selection (linux)
-                -- "% : abs_filename
-                -- "/ : last search query (vim.search_query)
+  mode = "normal",          -- normal, visual, command, insert, delete
+  registers = {
+    ['"'] = "",             -- unnamed register
+    ['0'] = "",             -- yank register
+    ['1'] = "",             -- last delete
+    ['+'] = "",             -- system clipboard
+    ['*'] = ""              -- primary selection (linux)
+    -- "% : abs_filename
+    -- "/ : last search query (vim.search_query)
   },
   command_buffer = "",
   search_query = "",
@@ -559,7 +563,7 @@ local function y_type(doc, text, l1, c1, l2, c2)
   if l1 == l2 then -- single line case
     line_width = #doc.lines[l1]
     if #text == line_width then
-       return "line"
+      return "line"
     end
   else
     if (c1 == 1 and c2 == #doc.lines[l2]) or (c2 == 1 and c1 == #doc.lines[l1]) then
@@ -629,8 +633,8 @@ local function delete(el, ec, sl, sc)
     sl, el, sc, ec = el, sl, ec, sc
   end
   if config.vim.unnamedplus then
-     system.set_clipboard(reg_text)
-     vim.registers['+'] = { text = reg_text, type = yank_type }
+    system.set_clipboard(reg_text)
+    vim.registers['+'] = { text = reg_text, type = yank_type }
   end
   vim.registers['"'] = { text = reg_text, type = yank_type }
   vim.registers['1'] = { text = reg_text, type = yank_type }
@@ -651,12 +655,12 @@ local function put(direction, count)
   local yank_type = reg.type or "char"
 
   if config.vim.unnamedplus then
-     reg = { text = system.get_clipboard(), type = "char" }
-     if vim.registers['+'].text == reg.text then
-        yank_type = vim.registers['+'].type
-     else
-        vim.registers['+'] = reg
-     end
+    reg = { text = system.get_clipboard(), type = "char" }
+    if vim.registers['+'].text == reg.text then
+      yank_type = vim.registers['+'].type
+    else
+      vim.registers['+'] = reg
+    end
   end
 
   if not reg.text then return end
@@ -1042,6 +1046,12 @@ vim.motions = {
   ["y"] = function(doc, l, _)
     return l, 1, l, #doc.lines[l]
   end,
+
+  ["%"] = function(doc, l, c)
+    local l2, c2
+    l2, c2 = find_match(doc, l, c)
+    return l2, c2, l, c
+  end,
 }
 
 -- m: normal_keymaps
@@ -1189,6 +1199,9 @@ vim.normal_keys["?"] = function()
   }
 end
 
+local pairs = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+local closing = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
+
 -- m: get region
 get_region = function(l1, c1, motion_prefix, text_object)
   local doc = get_doc()
@@ -1202,24 +1215,43 @@ get_region = function(l1, c1, motion_prefix, text_object)
       return l1, c1 + 1, l2, c2 - 1
     end
   elseif text_object == "s" then
+     --
   elseif text_object == "p" then
-    -- TODO: else between quotes and parenthesis
+     --
+  -- TODO: not correct rework
+  elseif pairs[text_object] or closing[text_object] then
+     -- l2, c2 = find_match(doc, l1, c1)
+     -- return l1, c1, l2, c2
   end
 end
 
-local pairs = {["("]=")",["["]="]",["{"]="}"}
-local closing = { [")"]="(", ["]"]="[", ["}"]="{" }
+find_match = function(doc, line, col)
+  local char = doc.lines[line] and doc.lines[line]:sub(col, col)
+  if not (pairs[char] or closing[char]) then return end
+  local dir         = pairs[char] and 1 or -1 -- forward of backward search
+  local match       = dir == 1 and pairs[char] or closing[char]
+  local depth       = 0
+  -- backward direction closing becomes open
+  local open, close = dir == 1 and pairs or closing, dir == 1 and closing or pairs
 
--- let's make it general
-local function find_match(doc, l, c)
-    -- we find matches defined in pairs and closes
-       -- 1. get the char the bracket
-       -- 2. based on is in pair or closing we know the seach direction
-       -- 3. start the search, we use nesting depth tracker. depth +1 when we have open bracket -1 when we close it
-       -- 4. we stop when depth is 0 and we have a match fiting our starting char 
-    return l, c, l, c
+  for l = line, dir == 1 and #doc.lines or 1, dir do
+    local start, stop, step = l == line and col + dir or (dir == 1 and 1 or #doc.lines[l]), dir == 1 and #doc.lines[l] or
+    1, dir
+    for c = start, stop, step do
+      local ch = doc.lines[l]:sub(c, c)
+      if open[ch] then
+        depth = depth + 1
+      elseif close[ch] then
+        if depth > 0 then
+          depth = depth - 1
+        elseif ch == match then
+          echo(" %s %s ", l, c)
+          return l , c
+        end
+      end
+    end
+  end
 end
-
 
 -- m: vim_docview ----------------------------------------------------
 function DocView:draw_line_body(line, x, y)
