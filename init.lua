@@ -3,13 +3,10 @@
 -- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
--- TODO: put does not make selection at the end in multiple lines
-
 -- FEATURES ------------------------------------------------------------------
 
--- TODO: implement % to match brackets 
--- TODO: implement jumps (marks), and must be able to record buffers too. another plugin
-         -- implement my marker
+-- ONGOING: implement % to match brackets 
+
 -- TODO: add second count to implement something like 3d2k
 -- TODO: follow delete() naming and reduce noise adopt short naming
 -- TODO: add mechanisms to use registers, yank and put can accept register argument
@@ -26,6 +23,7 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: put does not make selection at the end in multiple lines
 -- DONE: yy yank a line
 -- DONE: put can handle clipboard , add a config that allows vim system to use clipboard
 -- DONE: copy path of the current file in clipboard
@@ -631,7 +629,7 @@ local function delete(el, ec, sl, sc)
     sl, el, sc, ec = el, sl, ec, sc
   end
   if config.vim.unnamedplus then
-     system.set_clipboard(text)
+     system.set_clipboard(reg_text)
      vim.registers['+'] = { text = reg_text, type = yank_type }
   end
   vim.registers['"'] = { text = reg_text, type = yank_type }
@@ -686,7 +684,7 @@ local function put(direction, count)
           doc:insert(insert_line, 1, line_textt)
           doc:set_selection(insert_line, 1)
         end
-        flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
+        flash(insert_line, 1, insert_line + #lines - 1, #lines[#lines], flash_color, flash_time, doc)
       else
         for i, line_text in ipairs(lines) do
           if not line_text:match("\n$") then
@@ -1207,6 +1205,19 @@ get_region = function(l1, c1, motion_prefix, text_object)
   elseif text_object == "p" then
     -- TODO: else between quotes and parenthesis
   end
+end
+
+local pairs = {["("]=")",["["]="]",["{"]="}"}
+local closing = { [")"]="(", ["]"]="[", ["}"]="{" }
+
+-- let's make it general
+local function find_match(doc, l, c)
+    -- we find matches defined in pairs and closes
+       -- 1. get the char the bracket
+       -- 2. based on is in pair or closing we know the seach direction
+       -- 3. start the search, we use nesting depth tracker. depth +1 when we have open bracket -1 when we close it
+       -- 4. we stop when depth is 0 and we have a match fiting our starting char 
+    return l, c, l, c
 end
 
 
