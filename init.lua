@@ -3,10 +3,13 @@
 -- Change log-----------------------------------------------------------------
 -- BUGS ----------------------------------------------------------------------
 
+-- FIX: vi{ includes last } if first char on line 
+-- FIX: clean i and a, maybe they can become translations since same arguments
+
 -- FEATURES ------------------------------------------------------------------
 
--- ONGOING: implement % to match brackets
--- TODO: enable f and F motion to jump to next character
+-- TODO: enable f and F motion to jump to next character (translation)
+-- TODO: clean code before becoming unmaintable (KISS)
 
 -- TODO: add second count to implement something like 3d2k
 -- TODO: enable x and X  and s and S a single character deletion
@@ -25,6 +28,7 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: implement % to match brackets
 -- DONE: put does not make selection at the end in multiple lines
 -- DONE: yy yank a line
 -- DONE: put can handle clipboard , add a config that allows vim system to use clipboard
@@ -108,6 +112,7 @@ config.vim = {
 local resolve_motion
 local get_region
 local find_match
+local find_char
 
 -- m: require
 local command_line = require "plugins.command-line"
@@ -150,13 +155,13 @@ local function center_selection_in_view(_, line)
 end
 
 local vim = {
-  mode = "normal",          -- normal, visual, command, insert, delete
+  mode = "normal", -- normal, visual, command, insert, delete
   registers = {
-    ['"'] = "",             -- unnamed register
-    ['0'] = "",             -- yank register
-    ['1'] = "",             -- last delete
-    ['+'] = "",             -- system clipboard
-    ['*'] = ""              -- primary selection (linux)
+    ['"'] = "",    -- unnamed register
+    ['0'] = "",    -- yank register
+    ['1'] = "",    -- last delete
+    ['+'] = "",    -- system clipboard
+    ['*'] = ""     -- primary selection (linux)
     -- "% : abs_filename
     -- "/ : last search query (vim.search_query)
   },
@@ -1215,16 +1220,61 @@ get_region = function(l1, c1, motion_prefix, text_object)
       return l1, c1 + 1, l2, c2 - 1
     end
   elseif text_object == "s" then
-     --
+    --
   elseif text_object == "p" then
-     --
-  -- TODO: not correct rework
-  elseif pairs[text_object] or closing[text_object] then
-     -- l2, c2 = find_match(doc, l1, c1)
-     -- return l1, c1, l2, c2
+    --
+  elseif pairs[text_object] then
+    -- TODO: edge case on the bracket
+    local l, c = l1, c1
+    l2, c2 = find_char(doc, l1, c1, text_object, -1)
+    l1, c1 = find_match(doc, l2, c2)
+
+    -- check inside pairs
+    if not (l2 < l or (l2 == l and c2 < c)) or
+     not (l1 > l or (l1 == l and c1 > c)) then
+      return
+    end
+
+    if motion_prefix == "i" then
+      return l1, c1-1, l2, c2+1
+    elseif motion_prefix == "a" then
+      return l1, c1, l2, c2
+    end
+
+  elseif closing[text_object] then
+    -- TODO: edge case on the bracket
+    local l, c = l1, c1
+    l1, c1 = find_char(doc, l1, c1, text_object, 1)
+    l2, c2 = find_match(doc, l1, c1)
+
+    -- check inside pairs
+    if not (l2 < l or (l2 == l and c2 < c)) or
+     not (l1 > l or (l1 == l and c1 > c)) then
+      return
+    end
+
+    if motion_prefix == "i" then
+      return l1, c1-1, l2, c2+1
+    elseif motion_prefix == "a" then
+      return l1, c1, l2, c2
+    end
+
   end
 end
 
+-- find char in both directions
+-- TODO: this can be a translations
+find_char = function(doc, l, c, ch, dir)
+  while true do
+    local nl, nc = doc:position_offset(l, c, dir)
+    if nl == l and nc == c then return end
+    l, c = nl, nc
+    if (doc.lines[l] or ""):sub(c, c) == ch then return l, c end
+  end
+end
+
+-- brackets
+-- TODO: this is a translations
 find_match = function(doc, line, col)
   local char = doc.lines[line] and doc.lines[line]:sub(col, col)
   if not (pairs[char] or closing[char]) then return end
@@ -1236,7 +1286,7 @@ find_match = function(doc, line, col)
 
   for l = line, dir == 1 and #doc.lines or 1, dir do
     local start, stop, step = l == line and col + dir or (dir == 1 and 1 or #doc.lines[l]), dir == 1 and #doc.lines[l] or
-    1, dir
+        1, dir
     for c = start, stop, step do
       local ch = doc.lines[l]:sub(c, c)
       if open[ch] then
@@ -1246,7 +1296,7 @@ find_match = function(doc, line, col)
           depth = depth - 1
         elseif ch == match then
           echo(" %s %s ", l, c)
-          return l , c
+          return l, c
         end
       end
     end
