@@ -2,6 +2,9 @@
 
 -- BUGS ----------------------------------------------------------------------
 
+-- FIX: put a whole file makes the last line putted first only when put reaches end of file
+-- FIX: visual line when reaches the end of a file spit and error 
+-- FIX: visual line from down to up when canceled stay at new location
 -- FIX: vi{ includes last } if first char on line
 -- FIX: clean i and a, maybe they can become translations since same arguments
 -- FIX: more tests to the inner and around scenarios
