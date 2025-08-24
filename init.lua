@@ -3,7 +3,6 @@
 -- BUGS ----------------------------------------------------------------------
 
 -- FIX: put a whole file makes the last line putted first only when put reaches end of file
--- FIX: visual line when reaches the end of a file spit and error 
 -- FIX: visual line from down to up when canceled stay at new location
 -- FIX: vi{ includes last } if first char on line
 -- FIX: clean i and a, maybe they can become translations since same arguments
@@ -11,6 +10,7 @@
 
 -- FEATURES ------------------------------------------------------------------
 
+-- TODO: make text color change when flashing
 -- TODO: update README
 -- TODO: clean code before becoming unmaintable (KISS)
 -- TODO: Ctrl-r redo
@@ -34,6 +34,7 @@
 
 -- DONE -----------------------------------------------------------------------
 
+-- DONE: visual line when reaches the end of a file spit and error 
 -- DONE: enable x and X  and s and S a single character deletion
 -- DONE: enable f and F motion to jump to next character (translation)
 -- DONE: implement % to match brackets
@@ -111,6 +112,7 @@ local search = require "core.doc.search"
 config.vim = {
   unified_search = true,
   unnamedplus = true,
+  flash_color = style.caret
 }
 
 -- m: forward definitions
@@ -590,7 +592,6 @@ end
 -- m: yank()
 local function yank(l1, c1, l2, c2, flash_time)
   local ft = flash_time or 0
-  local flash_color = style.accent
   local doc = get_doc()
   if not doc then return end
   if not (l1 and c1 and l2 and c2) then
@@ -612,7 +613,7 @@ local function yank(l1, c1, l2, c2, flash_time)
   vim.registers['0'] = { text = text, type = yank_type }
 
   if ft ~= 0 then
-    flash(l1, c1, l2, c2, flash_color, ft, doc)
+    flash(l1, c1, l2, c2, config.vim.flash_color, ft, doc)
   end
 end
 
@@ -658,12 +659,12 @@ local function delete(el, ec, sl, sc)
 end
 
 -- m: put()
+-- TODO: limit operations to the lines of the doc
 local function put(direction, count)
   count = count or 1
   local doc = get_doc()
   if not doc then return end
   local flash_time = 0.2
-  local flash_color = style.selection
 
   local l, c = doc:get_selection()
 
@@ -704,7 +705,7 @@ local function put(direction, count)
           doc:insert(insert_line, 1, line_textt)
           doc:set_selection(insert_line, 1)
         end
-        flash(insert_line, 1, insert_line + #lines - 1, #lines[#lines], flash_color, flash_time, doc)
+        flash(insert_line, 1, insert_line + #lines - 1, #lines[#lines], config.vim.flash_color, flash_time, doc)
       else
         for i, line_text in ipairs(lines) do
           if not line_text:match("\n$") then
@@ -713,13 +714,13 @@ local function put(direction, count)
           doc:insert(insert_line + i - 1, 1, line_textt)
           doc:set_selection(insert_line + i - 1, 1)
         end
-        flash(insert_line, 1, insert_line + #lines - 1, #line_textt, flash_color, flash_time, doc)
+        flash(insert_line, 1, insert_line + #lines - 1, #line_textt, config.vim.flash_color, flash_time, doc)
       end
     else                         -- char
       doc:insert(l, c + 1, text) -- +1 after cursor
       local nl, nc = doc:position_offset(l, c, #text)
       doc:set_selection(nl, nc)
-      flash(l, c + 1, nl, nc, flash_color, flash_time, doc)
+      flash(l, c + 1, nl, nc, config.vim.flash_color, flash_time, doc)
     end
   end
 end
@@ -807,10 +808,12 @@ vim.operators = {
       end
     elseif startl > endl then
       text = doc.lines[startl]
+      if not text then return end
       startc = #text
       endc = 1
     elseif startl < endl then
       text = doc.lines[endl]
+      if not text then return end
       startc = 1
       endc = #text
     end
