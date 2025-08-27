@@ -1,10 +1,65 @@
 * Vim
-vim emulation for pragtical and lite xl editors
+vim emulation for Pragtical and Lite XL editors
+Author: S.Ghamri
 
-* Dependencies
+** Inspiration
+This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible to Vim's modal editing experience, while adapting to the Lite XL and Pragtical environments. The goal is to provide a robust, extensible, and familiar workflow for users who love Vim's efficiency and philosophy.
 
-* Features
+** Features
+- Modal editing: normal, insert, visual, visual-line, command, delete, o-pending
+- Full keymap support for normal and visual modes, including remapping (hjkl, etc.)
+- Visual selection, line selection, and motion-based operations
+- Operator-pending mode for advanced text manipulation
+- Customizable ex commands (e.g., :w, :q, :bd, :path)
+- Search and replace with / and ? (forward and backward)
+- Register support for yanking, putting, and deleting
+- System clipboard integration (unnamedplus)
+- Flashing and highlighting for feedback (e.g., yank, put)
+- Centering selection in view after motions
+- Custom command registration and extensibility
+- Status bar integration with command-line plugin (prompt, messaging, confirm)
+- Undo/redo, repeat last change, and advanced motions (word, line, bracket, etc.)
+- Bracket matching (%) and text object support (iw, aw, etc.)
+- Customizable config (flash color, unified search, etc.)
+- Key flow and caret adapts to text size and mode
+- Integration with Pragtical's command-line for ex commands and messaging
+- Confirm prompt (y/n) for destructive actions
+- Designed to keep code under 1000 lines for maintainability
 
-* usage and keymaps 
+** Functionality Overview
+- The plugin sets up Vim modes and state tracking, including registers, command buffer, search query, operators, motions, and keymaps.
+- It overrides core event handling to intercept keypresses and text input, enabling modal behavior and remapping.
+- Operators (move, select, line_select, delete, yank) are defined to work with motions and text objects, supporting complex editing workflows.
+- Motions include character, word, line, and bracket navigation, with support for custom text objects and translations.
+- Ex commands are registered and executed via the command-line plugin, with support for custom user commands and suggestions.
+- Visual feedback is provided via flashing, highlighting, and status bar messages.
+- The plugin integrates tightly with the command-line plugin, using decorated instances for command, search, and confirm prompts.
+- Undo, redo, and repeat are supported, with plans for further enhancements (e.g., dot-repeat, advanced registers).
+- The plugin is extensible: users can add custom commands, keymaps, and behaviors.
+
+** Usage and Keymaps
+- Normal mode: hjkl for movement, x/X/s/S for deletion, y for yank, p/P for put, o/O for new lines, u for undo, : for command, / for search, ? for reverse search, v/V for visual modes, * for search word under cursor, n/N for next/prev search, % for bracket match, etc.
+- Visual mode: v/V to enter, motions to select, operators to act on selection, p/P for put, * for search selection, # for yank/delete selection.
+- Operator-pending: after d/y/c, wait for motion or text object.
+- Command-line: : for ex commands, / and ? for search, confirm prompt for y/n actions.
+- Remapping: arrow keys to hjkl, customizable via config.
+
+** Extensibility
+- Users can register custom ex commands via vim.register_command(cmd, action, desc)
+- Keymaps and motions can be extended or remapped
+- Status bar messaging and prompts are fully customizable
+- Designed for easy integration with other plugins and workflows
+
+** Known Issues & TODOs
+- Some advanced Vim features (dot-repeat, registers, text objects) are planned but not fully implemented
+- Visual feedback and caret sizing may need further refinement
+- Testing and edge cases (e.g., bracket matching, visual line mode) are ongoing
+- Please open issues for bugs, feature requests, or suggestions
+
+** Disclaimer
+This plugin is a work in progress and has not been exhaustively tested. If you encounter any issues, please open an issue and the author will address it.
+
+** License
+MIT
 
 
