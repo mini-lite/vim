@@ -1,3 +1,4 @@
+-- Module: vim
 -- Author: S.Ghamri
 
 -- BUGS ----------------------------------------------------------------------
@@ -10,6 +11,7 @@
 
 -- FEATURES ------------------------------------------------------------------
 
+-- TODO: How do we add vim ex commands ??
 -- TODO: make text color change when flashing
 -- TODO: update README
 -- TODO: clean code before becoming unmaintable (KISS)
@@ -121,18 +123,6 @@ local resolve_motion
 local get_region
 local find_match
 
--- m: require
-local command_line = require "plugins.command-line"
-command_line.set_item_name("status:vim")
-command_line.add_status_item()
-command_line.minimal_status_view = true -- only item will show
-
--- helper for debug
-local function echo(fmt, ...)
-  local text = string.format(fmt, ...)
-  command_line.show_message({ text }, 1)
-end
-
 -- TODO: rework this part I am not sure. is the width correct
 local base_caret_width = 10
 local function update_caret_width()
@@ -220,17 +210,57 @@ local function reset_state()
   vim.command_buffer = "" -- debug
 end
 
+-- m: command line vim integration
+local command_line = require "plugins.command-line"
+
+command_line.set_item_name("status:vim")
+command_line.add_status_item()
+command_line.minimal_status_view = true -- only item will show
+
+local function decorate_with_vim(instance)
+  local orig_start = instance.start_command
+  function instance:start_command(opts)
+    local result = orig_start(self, opts)
+    vim.set_mode("command")
+    return result
+  end
+
+  local orig_exec = instance.execute_or_return_command
+  function instance:execute_or_return_command()
+    local result = orig_exec(self) -- if closed in_command here is false
+    if not command_line.is_active() then -- no command line prompt is open
+      vim.set_mode("normal") 
+    end
+    return result
+  end
+
+  local orig_cancel = instance.cancel_command
+  function instance:cancel_command()
+    local result = orig_cancel(self)
+    vim.set_mode("normal")
+    return result
+  end
+
+  return instance
+end
+
 -- set instance command line
-local instance_command = command_line.new()
+local instance_command = decorate_with_vim(command_line.new())
 instance_command:set_prompt(":")
 
 -- set forward search line
-local forward_search = command_line.new()
+local forward_search = decorate_with_vim(command_line.new())
 forward_search:set_prompt("/")
 
 -- set backward search line
-local backward_search = command_line.new()
+local backward_search = decorate_with_vim(command_line.new())
 backward_search:set_prompt("?")
+
+-- command line helper for debug
+local function echo(fmt, ...)
+ local text = string.format(fmt, ...)
+ command_line.show_message({ text }, 1)
+end
 
 -- keys that can modify text
 local modifying_keys = {
@@ -1214,51 +1244,42 @@ vim.visual_keys = {
 
 -- command to launch the command line
 vim.normal_keys[":"] = function()
-  vim.set_mode("command")
   instance_command:start_command {
     submit = function(input)
-      vim.run_command(input)
-      vim.set_mode("normal")
+      vim.run_command(input) -- non blocking
     end,
     suggest = function(input)
       return vim.get_suggests(input)
     end,
     cancel = function()
-      vim.set_mode("normal")
     end
   }
 end
 
 -- command to launch the search line
 vim.normal_keys["/"] = function()
-  vim.set_mode("command")
   forward_search:start_command {
     submit = function(input)
       vim.forward_search(input) -- jump to first occurance
-      vim.set_mode("normal")
     end,
     suggest = function(_)
       return "" -- highlights user input, kind of suggests
     end,
     cancel = function()
-      vim.set_mode("normal")
     end
   }
 end
 
 -- command to launch the search line
 vim.normal_keys["?"] = function()
-  vim.set_mode("command")
   backward_search:start_command {
     submit = function(input)
       vim.backward_search(input) -- jump to first occurance
-      vim.set_mode("normal")
     end,
     suggest = function(_)
       return "" -- highlights user input, kind of suggests
     end,
     cancel = function()
-      vim.set_mode("normal")
     end
   }
 end
@@ -1422,6 +1443,29 @@ end
 
 -- Initialization ---------------
 vim.set_mode("normal")
+
+vim.echo = function(fmt, ...)
+ local text = string.format(fmt, ...)
+ command_line.show_message({ text }, 1)
+end
+
+-- confirm
+vim.confirm = function(message, cb)
+  local prompt = decorate_with_vim(command_line.new())
+  prompt:set_prompt(message .. " (y/yes to confirm): ")
+  prompt:start_command {
+    submit = function(input)
+      local answer = input and input:lower()
+      if answer == "y" or answer == "yes" then
+        cb(true)
+      else
+        cb(false)
+      end
+    end,
+    cancel = function()
+    end
+  }
+end
 
 return vim
 
