@@ -3,27 +3,18 @@
 
 -- BUGS ----------------------------------------------------------------------
 
--- FIX: put a whole file makes the last line putted first only when put reaches end of file
--- FIX: visual line from down to up when canceled stay at new location
--- FIX: vi{ includes last } if first char on line
 -- FIX: clean i and a, maybe they can become translations since same arguments
--- FIX: more tests to the inner and around scenarios
 
 -- FEATURES ------------------------------------------------------------------
+-- TODO: vim should pick all the keymaps then overrides what we want and enable the others
 
--- TODO: How do we add vim ex commands ??
--- TODO: make text color change when flashing
--- TODO: update README
--- TODO: clean code before becoming unmaintable (KISS)
--- TODO: Ctrl-r redo
 -- TODO: . think about how to implement repeat last change
--- TODO: r replace single character. next key goes in place of selected char
--- TODO: ~ toggle case of the current char
-
+-- TODO: clean code before becoming unmaintable (KISS)
+-- TODO: implement: r replace single character, the next "key" goes in place of selected char
+-- TODO: implement: ~ toggle case of the current char
 -- TODO: add second count to implement something like 3d2k
 -- TODO: follow delete() naming and reduce noise adopt short naming
 -- TODO: add mechanisms to use registers, yank and put can accept register argument
-
 -- TODO: it must be under 1000 lines of code
 -- TODO: shift is still selecting in normal disable it, either disable this or support it
 -- TODO: normal mode is working outside doc view, to benifit from : command line outside
@@ -33,10 +24,18 @@
 -- TODO: how to test vim, it is starting to be big, minor change is going to effect other areas
 -- TODO: enable only overrides only when vim plugin is loaded
 -- TODO: <command line> enhance command line messaging system with FiFo with time
+-- TODO: make text color change when flashing
 
 -- DONE -----------------------------------------------------------------------
 
--- DONE: visual line when reaches the end of a file spit and error 
+-- DONE: Ctrl-r redo
+-- DONE: vi{ includes last } if first char on line
+-- DONE: put a whole file makes the last line putted first only when put reaches end of file
+-- DONE: caret width
+-- DONE: update README
+-- DONE: visual line from down to up when canceled stay at new location
+-- DONE: How do we add vim ex commands ??
+-- DONE: visual line when reaches the end of a file spit and error
 -- DONE: enable x and X  and s and S a single character deletion
 -- DONE: enable f and F motion to jump to next character (translation)
 -- DONE: implement % to match brackets
@@ -104,6 +103,10 @@ local translate = require "core.doc.translate"
 local DocView = require "core.docview"
 local config = require "core.config"
 local search = require "core.doc.search"
+local keymap = require "core.keymap"
+
+-- TODO: unbind keys when vim is enabled, restore when vim is disabled
+keymap.unbind("ctrl+r")
 
 -- vim plugin defaults
 ---@class VimConfig
@@ -122,15 +125,6 @@ local get_translation
 local resolve_motion
 local get_region
 local find_match
-
--- TODO: rework this part I am not sure. is the width correct
-local base_caret_width = 10
-local function update_caret_width()
-  local scale = 1
-  local base_font_size = 20 -- TODO: enhance how caret size is calculated
-  scale = style.code_font:get_size() / base_font_size
-  style.caret_width = math.floor(base_caret_width * scale + 0.5)
-end
 
 local function get_doc()
   local dv = core.active_view
@@ -167,7 +161,6 @@ local vim = {
   command_map = {},
   operators = {},
   motions = {},
-  last_position = {}, -- save cursor position befor executions
   max_col = 0,
   normal_keys = {},
   visual_keys = {},
@@ -182,10 +175,18 @@ local state = {
   text_object = nil,
   motion_prefix = nil,
   motion = nil,
+  modifier = nil,
   register = nil,
 }
 
--- remove selection
+local function  set_vim_caret()
+  if vim.mode == "insert" then
+    style.caret_width = common.round(1.5 * SCALE)
+  else
+    style.caret_width = common.round(8 * SCALE)
+  end
+end
+
 local function deselect()
   local doc = get_doc()
   if not doc then return end
@@ -194,12 +195,10 @@ local function deselect()
   end
 end
 
--- normalize count, default 1
 local function get_count()
   return tonumber(state.count) or 1
 end
 
--- reset state helper
 local function reset_state()
   state.count = 1
   state.operator = nil
@@ -229,7 +228,7 @@ local function decorate_with_vim(instance)
   function instance:execute_or_return_command()
     local result = orig_exec(self) -- if closed in_command here is false
     if not command_line.is_active() then -- no command line prompt is open
-      vim.set_mode("normal") 
+      vim.set_mode("normal")
     end
     return result
   end
@@ -244,32 +243,37 @@ local function decorate_with_vim(instance)
   return instance
 end
 
--- set instance command line
 local instance_command = decorate_with_vim(command_line.new())
 instance_command:set_prompt(":")
 
--- set forward search line
 local forward_search = decorate_with_vim(command_line.new())
 forward_search:set_prompt("/")
 
--- set backward search line
 local backward_search = decorate_with_vim(command_line.new())
 backward_search:set_prompt("?")
 
--- command line helper for debug
 local function echo(fmt, ...)
  local text = string.format(fmt, ...)
  command_line.show_message({ text }, 1)
 end
 
--- keys that can modify text
-local modifying_keys = {
+-- keys that can input
+local input_keys = {
   ["return"] = true,
   ["backspace"] = true,
   ["tab"] = true,
   ["delete"] = true,
   ["insert"] = true,
   ["space"] = true
+}
+
+vim.modifier_keys = {
+  ["left ctrl"] = true,
+  ["right ctrl"] = true,
+  ["left shift"] = true,
+  ["right shift"] = true,
+  ["left alt"] = true,
+  ["right alt"] = true,
 }
 
 -- keys remaps
@@ -386,6 +390,10 @@ local function handle_input(key)
   return true
 end
 
+local function normalize_modifier(key)
+  return (key:gsub("left ", ""):gsub("right ", ""):gsub("%s+", ""))
+end
+
 -- m: on_event override
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
@@ -397,6 +405,15 @@ function core.on_event(type, a, ...)
         return true -- block
       end
     elseif type == "keypressed" then
+      -- TODO: fragile but necessary
+      if vim.modifier and vim.modifier ~= "shift" then
+        if handle_input(a) then
+          return true -- block
+        end
+      end
+      if vim.modifier_keys[a] then
+         vim.modifier = normalize_modifier(a)
+      end
       -- some key remaps to input
       if vim.remap_keys[a] and vim.mode ~= "normal" then
         if handle_input(vim.remap_keys[a]) then
@@ -414,12 +431,14 @@ function core.on_event(type, a, ...)
       end
 
       if vim.mode == "normal" then
-        if modifying_keys[a] then
+        if input_keys[a] then
           return true -- block in normal mode
         end
       end
     elseif type == "keyreleased" then
-      -- released
+      if vim.modifier_keys[a] and vim.modifier == normalize_modifier(a) then
+          vim.modifier = nil
+      end
     end
   end -- active view
 
@@ -440,10 +459,9 @@ end
 -- m: mode_switch
 function vim.set_mode(m)
   local message = {}
+  set_vim_caret()
   if m == "normal" then
     return_to_line()
-    style.caret_width = common.round(7 * SCALE)
-    update_caret_width()
     command_line.show_message({}, 0) -- 0 = permanent
   elseif m == "insert" then
     style.caret_width = common.round(1.5 * SCALE)
@@ -455,9 +473,6 @@ function vim.set_mode(m)
     local doc = get_doc()
     if not doc then return end
     local l, c = doc:get_selection()     -- c starts from 1
-    vim.last_position = { l = l, c = c } -- record last position to return to
-    style.caret_width = common.round(7 * SCALE)
-    update_caret_width()
     message = {
       style.text, "-- VISUAL --",
     }
@@ -466,10 +481,7 @@ function vim.set_mode(m)
     local doc = get_doc()
     if not doc then return end
     local l, c = doc:get_selection()                         -- c starts from 1
-    vim.last_position = { l = l, c = c, ll = #doc.lines[l] } -- record last position to return to
     doc:set_selection(l, #doc.lines[l], l, 1)
-    style.caret_width = common.round(7 * SCALE)
-    update_caret_width()
     message = {
       style.text, "-- VISUAL-LINE --",
     }
@@ -604,7 +616,8 @@ local function flash(l1, c1, l2, c2, color, time, doc)
   end)
 end
 
-local function y_type(doc, text, l1, c1, l2, c2)
+
+local function get_yank_type(doc, text, l1, c1, l2, c2)
   local line_width = 0
   if l1 == l2 then -- single line case
     line_width = #doc.lines[l1]
@@ -619,6 +632,7 @@ local function y_type(doc, text, l1, c1, l2, c2)
   return "char"
 end
 
+
 -- m: yank()
 local function yank(l1, c1, l2, c2, flash_time)
   local ft = flash_time or 0
@@ -630,7 +644,7 @@ local function yank(l1, c1, l2, c2, flash_time)
   local yank_type = "char"
   local text = get_text(l1, c1, l2, c2)
   if not text then return end
-  yank_type = y_type(doc, text, l1, c1, l2, c2)
+  yank_type = get_yank_type(doc, text, l1, c1, l2, c2)
 
   -- update registers
   if config.vim.unnamedplus then
@@ -656,7 +670,7 @@ local function delete(el, ec, sl, sc)
   end
   local reg_text = get_text(sl, sc, el, ec)
   if not reg_text then return end
-  local yank_type = y_type(doc, reg_text, sl, sc, el, ec)
+  local yank_type = get_yank_type(doc, reg_text, sl, sc, el, ec)
   local text = ""
 
   if el == sl then
@@ -688,13 +702,31 @@ local function delete(el, ec, sl, sc)
   doc:remove(sl, sc, el, ec)
 end
 
+-- insert lines
+local function get_insert_line(doc, direction, l, c)
+  if not doc then return end
+  local insert_line = 0
+
+  if direction == "down" then
+    if l == #doc.lines and doc.lines[l] == "" then
+        insert_line = l
+    else
+        insert_line = l + 1
+    end
+
+  elseif direction == "up" then
+      insert_line = l
+  end
+
+  return insert_line
+end
+
 -- m: put()
--- TODO: limit operations to the lines of the doc
 local function put(direction, count)
-  count = count or 1
   local doc = get_doc()
   if not doc then return end
   local flash_time = 0.2
+  count = count or 1
 
   local l, c = doc:get_selection()
 
@@ -724,9 +756,17 @@ local function put(direction, count)
 
   for _ = 1, count do
     if yank_type == "line" then
-      local insert_line = direction == "down" and (l + 1) or l
       local line_textt = ""
-      if direction == "down" then
+
+      local insert_line = get_insert_line(doc, direction, l, c)
+
+      if insert_line > #doc.lines then       -- add empty line
+          local t = doc.lines[#doc.lines] or ""
+          doc:insert(#doc.lines, #t, "\n")
+          doc:set_selection(#doc.lines, 1)
+      end
+
+      if direction == "down" then             -- downward
         for i = #lines, 1, -1 do
           line_textt = lines[i]
           if not line_textt:match("\n$") then
@@ -736,7 +776,7 @@ local function put(direction, count)
           doc:set_selection(insert_line, 1)
         end
         flash(insert_line, 1, insert_line + #lines - 1, #lines[#lines], config.vim.flash_color, flash_time, doc)
-      else
+      else                                    -- upward
         for i, line_text in ipairs(lines) do
           if not line_text:match("\n$") then
             line_textt = line_text .. "\n"
@@ -746,7 +786,7 @@ local function put(direction, count)
         end
         flash(insert_line, 1, insert_line + #lines - 1, #line_textt, config.vim.flash_color, flash_time, doc)
       end
-    else                         -- char
+    else                                      -- char
       doc:insert(l, c + 1, text) -- +1 after cursor
       local nl, nc = doc:position_offset(l, c, #text)
       doc:set_selection(nl, nc)
@@ -764,7 +804,6 @@ resolve_motion = function(motion, motion_prefix, text_object)
     if motion_prefix == "a" or motion_prefix == "i" then
       return get_region(l2, c2, motion_prefix, text_object)
     elseif motion_prefix == "f" or motion_prefix == "F" then
-      core.log("%s %s", motion_prefix, text_object)
       local this_char = get_translation("this-char")
       local dir = motion_prefix == "f" and 1 or -1
       local l1, c1 = this_char(doc, l2, c2, text_object, dir)
@@ -990,7 +1029,7 @@ local translations = {
   ["previous-page"]        = DocView.translate,
   ["next-block-end"]       = translate,
   ["previous-block-start"] = translate,
-  ["this-char"]            = function(doc, l, c, ch, dir)
+  ["this-char"]            = function(doc, l, c, ch, dir) -- find character and translate to it
     if not ch then
       ch = doc:get_char(l, c)
     end
@@ -1151,6 +1190,15 @@ vim.normal_keys = {
     doc:undo()
     echo("undo")
   end,
+  ["r"] = function()
+    echo("r pressed %s", vim.modifier)
+    if vim.modifier == "ctrl" then
+      local doc = get_doc()
+      if not doc then return end
+      doc:redo()
+      echo("redo")
+    end
+  end,
   ["o"] = function()
     local doc = get_doc()
     if not doc then return end
@@ -1284,6 +1332,7 @@ vim.normal_keys["?"] = function()
   }
 end
 
+-- m: pairs
 local pairs = { ["("] = ")", ["["] = "]", ["{"] = "}"}
 local closing = { [")"] = "(", ["]"] = "[", ["}"] = "{"}
 
@@ -1305,11 +1354,10 @@ get_region = function(l1, c1, motion_prefix, text_object)
       --
     elseif text_object == "p" then
       --
-    elseif pairs[text_object] then
-      -- TODO: edge case on the bracket
+    elseif pairs[text_object] then                              -- inner pair
       local l, c = l1, c1
       local this_char = get_translation("this-char")
-      l2, c2 = this_char(doc, l1, c1, text_object, -1)
+      l2, c2 = this_char(doc, l1, c1, text_object, -1)          -- dir -1 means up 
       l1, c1 = find_match(doc, l2, c2)
 
       -- check inside pairs
@@ -1319,12 +1367,18 @@ get_region = function(l1, c1, motion_prefix, text_object)
       end
 
       if motion_prefix == "i" then
-        return l1, c1 - 1, l2, c2 + 1
+        if (c1 - 1) == 0 then
+            l1 = l1 - 1
+            c1 = #doc.lines[l1]
+        else
+          c1 = c1 - 1
+        end
+        return l1, c1, l2, c2 + 1
       elseif motion_prefix == "a" then
         return l1, c1, l2, c2
       end
-    elseif closing[text_object] then
-      -- TODO: edge case on the bracket
+
+    elseif closing[text_object] then                             -- inner pair
       local l, c = l1, c1
       local this_char = get_translation("this-char")
       l1, c1 = this_char(doc, l1, c1, text_object, 1)
@@ -1341,7 +1395,6 @@ get_region = function(l1, c1, motion_prefix, text_object)
       elseif motion_prefix == "a" then
         return l1, c1, l2, c2
       end
-    -- "text" and "text"
     elseif text_object == '"' or text_object == "'" then
       local this_char = get_translation("this-char")
       l1, c1 = this_char(doc, l1, c1, text_object, 1)
@@ -1449,7 +1502,7 @@ vim.echo = function(fmt, ...)
  command_line.show_message({ text }, 1)
 end
 
--- confirm
+-- confirm prompt
 vim.confirm = function(message, cb)
   local prompt = decorate_with_vim(command_line.new())
   prompt:set_prompt(message .. " (y/yes to confirm): ")
