@@ -3,12 +3,14 @@
 
 -- BUGS ----------------------------------------------------------------------
 
+-- FIX: enhance how vim pluging overrides keymappings and add them (need to register known keymaps)
+-- FIX: arragne state variables like mod_keys
 -- FIX: clean i and a, maybe they can become translations since same arguments
 
 -- FEATURES ------------------------------------------------------------------
--- TODO: vim should pick all the keymaps then overrides what we want and enable the others
-
+-- TODO: clean code and arragne to ease moving forward
 -- TODO: . think about how to implement repeat last change
+
 -- TODO: clean code before becoming unmaintable (KISS)
 -- TODO: implement: r replace single character, the next "key" goes in place of selected char
 -- TODO: implement: ~ toggle case of the current char
@@ -175,7 +177,6 @@ local state = {
   text_object = nil,
   motion_prefix = nil,
   motion = nil,
-  modifier = nil,
   register = nil,
 }
 
@@ -267,13 +268,19 @@ local input_keys = {
   ["space"] = true
 }
 
+vim.mod_keys = {
+    ctrl  = false,
+    alt   = false,
+    shift = false
+}
+
 vim.modifier_keys = {
-  ["left ctrl"] = true,
-  ["right ctrl"] = true,
-  ["left shift"] = true,
-  ["right shift"] = true,
-  ["left alt"] = true,
-  ["right alt"] = true,
+  ["left ctrl"]   = false,
+  ["right ctrl"]  = false,
+  ["left shift"]  = false,
+  ["right shift"] = false,
+  ["left alt"]    = false,
+  ["right alt"]   = false,
 }
 
 -- keys remaps
@@ -282,6 +289,11 @@ vim.remap_keys = {
   ["up"]    = "k",
   ["left"]  = "h",
   ["right"] = "l",
+}
+
+-- released keys
+vim.known_keymaps = {
+  ["ctrl+r"] = true,
 }
 
 -- accumulate keys
@@ -390,11 +402,25 @@ local function handle_input(key)
   return true
 end
 
-local function normalize_modifier(key)
-  return (key:gsub("left ", ""):gsub("right ", ""):gsub("%s+", ""))
+local function update_mod_keys()
+  vim.mod_keys.ctrl  = (vim.modifier_keys["left ctrl"]  or vim.modifier_keys["right ctrl"])  or false
+  vim.mod_keys.shift = (vim.modifier_keys["left shift"] or vim.modifier_keys["right shift"]) or false
+  vim.mod_keys.alt   = (vim.modifier_keys["left alt"]   or vim.modifier_keys["right alt"])   or false
+end
+
+local function build_combo(key)
+    local mods = {}
+    if vim.mod_keys.ctrl  then table.insert(mods, "ctrl")  end
+    if vim.mod_keys.alt   then table.insert(mods, "alt")   end
+    if vim.mod_keys.shift then table.insert(mods, "shift") end
+    table.insert(mods, key:lower())
+    return table.concat(mods, "+")
 end
 
 -- m: on_event override
+-- some key combo are translated into text input
+-- for example shift + . is :
+-- on_ovent will be called for shift then for . and then for :
 local original_on_event = core.on_event
 function core.on_event(type, a, ...)
   local doc = get_doc()
@@ -404,16 +430,25 @@ function core.on_event(type, a, ...)
       if handle_input(a) then
         return true -- block
       end
-    elseif type == "keypressed" then
-      -- TODO: fragile but necessary
-      if vim.modifier and vim.modifier ~= "shift" then
+    elseif type == "keypressed" then  
+      -- only key combos registered will be counter
+      if vim.modifier_keys[a] == nil and (vim.mod_keys.ctrl or vim.mod_keys.alt or vim.mod_keys.shift) then
+      local cmb = build_combo(a)
+      if vim.known_keymaps[cmb] == nil then
+        -- nothing, let key reach original on_event
+      else
+        -- known vim can handle the key
         if handle_input(a) then
-          return true -- block
+            return true -- block
         end
       end
-      if vim.modifier_keys[a] then
-         vim.modifier = normalize_modifier(a)
       end
+
+      if vim.modifier_keys[a] ~= nil then
+         vim.modifier_keys[a] = true
+         update_mod_keys()
+      end
+
       -- some key remaps to input
       if vim.remap_keys[a] and vim.mode ~= "normal" then
         if handle_input(vim.remap_keys[a]) then
@@ -436,8 +471,9 @@ function core.on_event(type, a, ...)
         end
       end
     elseif type == "keyreleased" then
-      if vim.modifier_keys[a] and vim.modifier == normalize_modifier(a) then
-          vim.modifier = nil
+      if vim.modifier_keys[a] ~= nil then
+          vim.modifier_keys[a] = false
+          update_mod_keys()
       end
     end
   end -- active view
@@ -1191,8 +1227,7 @@ vim.normal_keys = {
     echo("undo")
   end,
   ["r"] = function()
-    echo("r pressed %s", vim.modifier)
-    if vim.modifier == "ctrl" then
+    if vim.mod_keys.ctrl then
       local doc = get_doc()
       if not doc then return end
       doc:redo()
