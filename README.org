@@ -52,11 +52,16 @@ This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible t
 
 ** Known Issues & TODOs
 -- BUGS ----------------------------------------------------------------------
+
 -- FIX: vi { } go confused by other opening brackets
 -- FIX: arragne state variables like mod_keys
 -- FIX: clean i and a, maybe they can become translations since same arguments
 
 -- FEATURES ------------------------------------------------------------------
+
+-- TODO: impelement insert count + "i or a" + input then <esc>
+-- TODO: make control robust, handle input gets lost sometimes 
+-- TODO: yank using yiw or yi{} not flashing
 -- TODO: clean code and arragne to ease moving forward
 -- TODO: . think about how to implement repeat last change
 
@@ -78,6 +83,9 @@ This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible t
 -- TODO: make text color change when flashing
 
 -- DONE -----------------------------------------------------------------------
+-- DONE: implement "<"
+-- DONE: implemented ">"
+-- DONE: tab = space, vim uses both tab and space
 -- DONE: enhance how vim pluging overrides keymappings and add them (need to register known keymaps)
 -- DONE: how keymaps are regisered in this plugin
 -- DONE: Ctrl-r redo

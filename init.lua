@@ -1,5 +1,6 @@
 -- Module: vim
 -- Author: S.Ghamri
+-------------------------------------------------------------
 
 -- mod-version:3
 local core = require "core"
@@ -15,7 +16,8 @@ local keymap = require "core.keymap"
 config.vim = {
  unified_search = true,
  unnamedplus = true,
- flash_color = style.caret
+ flash_color = style.caret,
+ expandtab = (config.tab_type == "soft")
 }
 
 -- m: forward definitions
@@ -87,12 +89,16 @@ local function set_vim_caret() -- reduce caret width when in insert mode
  end
 end
 
-local function deselect()
- local doc = get_doc()
- if not doc then return end
- for idx, _, _, line2, col2 in doc:get_selections(true) do
-  doc:set_selections(idx, line2, col2)
- end
+local function deselect(to_start)
+    local doc = get_doc()
+    if not doc then return end
+    for idx, start_line, start_col, end_line, end_col in doc:get_selections(true) do
+        if to_start then
+            doc:set_selections(idx, start_line, start_col)
+        else
+            doc:set_selections(idx, end_line, end_col)
+        end
+    end
 end
 
 local function get_count()
@@ -200,6 +206,9 @@ local function handle_input(key)
   return false -- release input
  end
 
+ -- pass if no operator and no vim control key
+
+
  -- pending too long, reset
  if #pending > 3 then
   pending = ""
@@ -216,6 +225,7 @@ local function handle_input(key)
 
  pending = pending .. key -- by now all numbers are filtred
  prev_dig = false         -- other key then digit is pressed
+ echo("Keys: %s<%s>", state.count, pending)
 
  if vim.mode == "normal" then
   state.operator = vim.operators["move"] -- default normal mode operator
@@ -258,8 +268,9 @@ local function handle_input(key)
  -- 1. operator go o-pending waiting for motion
  if vim.operators[pending] and vim.mode ~= "o-pending" then
   state.operator = vim.operators[pending]
+  local count = get_count()
   if vim.mode == "visual" or vim.mode == "visual-line" then
-   state.operator()
+   state.operator(count)
    reset_state()
   else
    vim.set_mode("o-pending")
@@ -772,7 +783,6 @@ end
 
 -- m: operators
 vim.operators = {
-
  ["move"] = function(count, motion, motion_prefix, text_object)
   local doc = get_doc()
   if not doc then return end
@@ -786,7 +796,6 @@ vim.operators = {
   doc:set_selection(l1, c1, l1, c1)
   center_selection_in_view(doc, l1)
  end,
-
  ["select"] = function(_, motion, motion_prefix, text_object)
   local doc = get_doc()
   if not doc then return end
@@ -798,14 +807,11 @@ vim.operators = {
    startl = l
    startc = c
   end
-
   if not (endl and endc and startl and startc) then
    return
   end
   doc:set_selection(endl, endc, startl, startc)
  end,
-
-
  ["line_select"] = function(_, motion, motion_prefix, text_object)
   local doc = get_doc()
   if not doc then return end
@@ -839,7 +845,6 @@ vim.operators = {
   end
   doc:set_selection(endl, endc, startl, startc)
  end,
-
  ["d"] = function(_, motion, motion_prefix, text_object)
   if motion or (motion_prefix and text_object) then
    local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
@@ -859,10 +864,84 @@ vim.operators = {
   end
   vim.set_mode("normal")
  end,
+ [">"] = function(count, motion, motion_prefix, text_object)
+     local doc = get_doc()
+     local endl, endc, startl, startc = doc:get_selection()
+     if startl == endl and endc == startc then
+        local l = startl
+        for i = 0, count-1 do
+            if (l+i) < #doc.lines then
+                if config.vim.expandtab then
+                    doc:insert(l + i, 1, string.rep(" ", config.indent_size))
+                else
+                    doc:insert(l + i, 1, "\t")
+                end
+            end
+        end
+     else
+        local from = math.min(startl, endl)
+        local to   = math.max(startl, endl)
+        for i = from, to do
+            if config.vim.expandtab then
+                doc:insert(i, 1, string.rep(" ", count * config.indent_size))
+            else
+                doc:insert(i, 1, string.rep("\t", count))
+            end
+        end
+     end
+     deselect({to_select=true})
+     vim.set_mode("normal")
+ end,
+ ["<"] = function(count, motion, motion_prefix, text_object)
+     local doc = get_doc()
+     local endl, endc, startl, startc = doc:get_selection()
+     if startl == endl and endc == startc then
+        local l = startl
+        for i = 0, count-1 do
+            if (l+i) < #doc.lines then
+                if config.vim.expandtab then
+                    for n = 1, config.indent_size do
+                        if get_text(l+i, 1, l+i, 1) == " " then
+                            doc:remove(l+i, 1, l+i, 2)
+                        else
+                            break
+                        end
+                    end
+                else
+                    if get_text(l+i, 1, l+i, 1) == "\t" then
+                        doc:remove(l+i, 1, l+i, 2)
+                    end
+                end
+            end
+        end
+     else
+        local from = math.min(startl, endl)
+        local to   = math.max(startl, endl)
+        for i = from, to do
+            for _ = 1, count do
+                if config.vim.expandtab then
+                    for n = 1, config.indent_size do
+                        if get_text(i, 1, i, 1) == " " then
+                            doc:remove(i, 1, i, 2)
+                        else
+                            break
+                        end
+                    end
+                else
+                    if get_text(i, 1, i, 1) == "\t" then
+                        doc:remove(i, 1, i, 2)
+                    else
+                        break
+                    end
+                end
+            end
+        end
+     end
+     deselect({to_select=true})
+     vim.set_mode("normal")
+ end,
  -- ["gu"]
  -- ["gU"]
- -- ["<"]
- -- [">"]
  -- ["c"]
 }
 
@@ -1109,6 +1188,14 @@ vim.motions = {
   l2, c2 = find_match(doc, l, c)
   return l2, c2, l, c
  end,
+
+ [">"] = function(doc, l, c)
+     -- pass no motion
+ end,
+
+ ["<"] = function(doc, l, c)
+     -- pass no motion
+ end,
 }
 
 -- m: normal_keymaps
@@ -1240,7 +1327,6 @@ vim.visual_keys = {
 -- update known keymaps
 for k in pairs(vim.normal_keys) do vim.known_keymaps[k] = true end
 for k in pairs(vim.visual_keys) do vim.known_keymaps[k] = true end
-
 
 -- command to launch the command line
 vim.normal_keys[":"] = function()
