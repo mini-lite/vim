@@ -51,10 +51,100 @@ This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible t
 - Designed for easy integration with other plugins and workflows
 
 ** Known Issues & TODOs
-- Some advanced Vim features (dot-repeat, registers, text objects) are planned but not fully implemented
-- Visual feedback and caret sizing may need further refinement
-- Testing and edge cases (e.g., bracket matching, visual line mode) are ongoing
-- Please open issues for bugs, feature requests, or suggestions
+-- BUGS ----------------------------------------------------------------------
+-- FIX: vi { } go confused by other opening brackets
+-- FIX: arragne state variables like mod_keys
+-- FIX: clean i and a, maybe they can become translations since same arguments
+
+-- FEATURES ------------------------------------------------------------------
+-- TODO: clean code and arragne to ease moving forward
+-- TODO: . think about how to implement repeat last change
+
+-- TODO: clean code before becoming unmaintable (KISS)
+-- TODO: implement: r replace single character, the next "key" goes in place of selected char
+-- TODO: implement: ~ toggle case of the current char
+-- TODO: add second count to implement something like 3d2k
+-- TODO: follow delete() naming and reduce noise adopt short naming
+-- TODO: add mechanisms to use registers, yank and put can accept register argument
+-- TODO: it must be under 1000 lines of code
+-- TODO: shift is still selecting in normal disable it, either disable this or support it
+-- TODO: normal mode is working outside doc view, to benifit from : command line outside
+-- TODO: "space" can be used as leader or adapt if user want space as leader
+-- TODO: let user extend commands
+-- TODO: add disable vim config, to allow user enable or disable it
+-- TODO: how to test vim, it is starting to be big, minor change is going to effect other areas
+-- TODO: enable only overrides only when vim plugin is loaded
+-- TODO: <command line> enhance command line messaging system with FiFo with time
+-- TODO: make text color change when flashing
+
+-- DONE -----------------------------------------------------------------------
+-- DONE: enhance how vim pluging overrides keymappings and add them (need to register known keymaps)
+-- DONE: how keymaps are regisered in this plugin
+-- DONE: Ctrl-r redo
+-- DONE: vi{ includes last } if first char on line
+-- DONE: put a whole file makes the last line putted first only when put reaches end of file
+-- DONE: caret width
+-- DONE: update README
+-- DONE: visual line from down to up when canceled stay at new location
+-- DONE: How do we add vim ex commands ??
+-- DONE: visual line when reaches the end of a file spit and error
+-- DONE: enable x and X  and s and S a single character deletion
+-- DONE: enable f and F motion to jump to next character (translation)
+-- DONE: implement % to match brackets
+-- DONE: put does not make selection at the end in multiple lines
+-- DONE: yy yank a line
+-- DONE: put can handle clipboard , add a config that allows vim system to use clipboard
+-- DONE: copy path of the current file in clipboard
+-- DONE: start pomping a command parser, user can add custom commands
+-- DONE: delete multiple lines throws selection below we should stay on top
+-- DONE: check unused variables, enable lsp and reformat code
+-- DONE: we are moving to center even if visible when clicking $
+-- DONE: add default operators to vim operators
+-- DONE: add a config to use only / and ? to search entire file
+-- DONE: clean yank paths
+--      - normalize select, delete, put, move.
+--      - they must use same coordinates, same clear logic for the future.
+-- DONE: cursor hides after putting multiple lines
+-- DONE: enhance put()
+--       - dd does does yank but put does not recognize is full line to yank below
+--       - put adds one character when yanked is visual line
+-- DONE: search returns a selection we should be able to yank directly (normal + 1 selection = yank possible)
+-- DONE: delete what is selected, we need a mode o-pending where motion for operation
+-- DONE: refactor to simplify motions code
+-- DONE: start adding important navigations
+-- DONE: let's escape pass through
+-- DONE: reverse search is not working
+-- DONE: implement start *
+-- DONE: now turn logic into a state machine to turn the emulation realistic
+--          handle_input is the state_machine run logic
+--          rely of delete_to, select_to and move_to otherwise we define our own
+-- DONE: caret is adapting to text size
+-- DONE: correct visual j k behavior
+-- DONE: motions can be function that accept text objects
+-- DONE: deleting a line does not leave an empty line behind
+-- DONE: track vim commands using a state
+-- DONE: puting also flashes and yanking flashes in all situations
+-- DONE: p and P insert even when empty. when adding a new line go selection to beginning of that line
+-- DONE: insert next line o and O
+-- DONE: fix the put in the next line no added empty line we must ensure that only one \n exists
+-- DONE: any delete will go to register to be put
+-- DONE: key flow in insert is not smooth, is typing smooth now ???
+-- DONE: vim is overriding arrows in normal mode
+-- DONE: dd delete
+-- DONE: a bug we need to click ddd to get dd
+-- DONE: copy is adding new lines
+-- DONE: enhance visual line mode
+-- DONE: correct cursor on selection problem, override all doc view related functions
+-- DONE: yanking shows flash of region change color to intense
+-- DONE: visual select does not start from current char
+-- DONE: enable yank and put
+-- DONE: show message notifying the change of state
+-- DONE: give the command line a name
+-- DONE: change caret in normal vim mode
+-- DONE: vim command-line
+-- DONE: modal editing
+-- DONE: let user extend keymaps
+------------------------------------------------------------------------------
 
 ** Disclaimer
 This plugin is a work in progress and has not been exhaustively tested. If you encounter any issues, please open an issue and the author will address it.
