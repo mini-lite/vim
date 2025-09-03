@@ -1461,7 +1461,7 @@ get_region = function(l1, c1, motion_prefix, text_object)
   local l2, c2
 
   if motion_prefix == "i" or motion_prefix == "a" then
-    if text_object == "w" then                      -- word region
+    if text_object == "w" then                             -- word region
       l2, c2 = translations["start-of-word"](doc, l1, c1)
       l1, c1 = translations["end-of-word"](doc, l1, c1)
       if motion_prefix == "i" then
@@ -1469,47 +1469,40 @@ get_region = function(l1, c1, motion_prefix, text_object)
       elseif motion_prefix == "a" then
         return l1, c1 + 1, l2, c2 - 1
       end
-    elseif text_object == "s" then                  -- sentence region
-    elseif text_object == "p" then                  -- pragraph region
-    elseif pairs[text_object] then                  -- pairs region
-      local l, c = l1, c1
-      local this_block = get_translation("this-block")
-      -- this char finds text_object
-      l2, c2 = this_block(doc, l1, c1, text_object, pairs[text_object], -1) -- dir -1 means up
-      l1, c1 = find_match(doc, l2, c2)
-      echo("%s %s %s %s", l1, c1, l2, c2)
+    elseif text_object == "s" then                          -- sentence region
+    elseif text_object == "p" then                          -- pragraph region
+    elseif pairs[text_object] or closing[text_object] then  -- paris region
+    local l, c = l1, c1
+    local this_block = get_translation("this-block")
+    local is_open = pairs[text_object] ~= nil
+    local l_start, c_start
 
-      if not (l2 < l or (l2 == l and c2 < c)) or not (l1 > l or (l1 == l and c1 > c)) then
+    if is_open then
+        l2, c2 = this_block(doc, l1, c1, text_object, pairs[text_object], -1)
+        l1, c1 = find_match(doc, l2, c2)
+        l_start, c_start = l, c
+    else
+        l1, c1 = this_block(doc, l1, c1, closing[text_object], text_object, 1)
+        l2, c2 = find_match(doc, l1, c1)
+        l_start, c_start = l, c
+    end
+
+    if not (l2 < l_start or (l2 == l_start and c2 < c_start)) or not (l1 > l_start or (l1 == l_start and c1 > c_start)) then
         return
-      end
+    end
 
-      if motion_prefix == "i" then
+    if motion_prefix == "i" then
         if (c1 - 1) == 0 then
-          l1 = l1 - 1
-          c1 = #doc.lines[l1]
+        l1 = l1 - 1
+        c1 = #doc.lines[l1]
         else
-          c1 = c1 - 1
+        c1 = c1 - 1
         end
         return l1, c1, l2, c2 + 1
-      elseif motion_prefix == "a" then
+    elseif motion_prefix == "a" then
         return l1, c1, l2, c2
-      end
-    elseif closing[text_object] then                  -- pairs region
-      local l, c = l1, c1
-      local this_block = get_translation("this-block")
-      l1, c1 = this_block(doc, l1, c1, closing[text_object], text_object, 1)
-      l2, c2 = find_match(doc, l1, c1)
-      echo("%s %s %s %s", l1, c1, l2, c2)
+    end
 
-      if not (l2 < l or (l2 == l and c2 < c)) or not (l1 > l or (l1 == l and c1 > c)) then
-        return
-      end
-
-      if motion_prefix == "i" then
-        return l1, c1 - 1, l2, c2 + 1
-      elseif motion_prefix == "a" then
-        return l1, c1, l2, c2
-      end
     elseif text_object == '"' or text_object == "'" then
       local this_char = get_translation("this-char")
       l1, c1 = this_char(doc, l1, c1, text_object, 1)
@@ -1526,9 +1519,7 @@ get_region = function(l1, c1, motion_prefix, text_object)
   end
 end
 
--- match anything
--- TODO: this is a translations
-find_match = function(doc, line, col)
+find_match = function(doc, line, col)                  -- match anything
   local char = doc.lines[line] and doc.lines[line]:sub(col, col)
   if not (pairs[char] or closing[char]) then
     return
@@ -1536,7 +1527,6 @@ find_match = function(doc, line, col)
   local dir = pairs[char] and 1 or -1 -- forward of backward search
   local match = dir == 1 and pairs[char] or closing[char]
   local depth = 0
-  -- backward direction closing becomes open
   local open, close = dir == 1 and pairs or closing, dir == 1 and closing or pairs
 
   for l = line, dir == 1 and #doc.lines or 1, dir do
@@ -1598,7 +1588,6 @@ function DocView:draw_line_body(line, x, y)
       local x2 = x + self:get_col_x_offset(line, draw_e)
       if x1 ~= x2 then
         local selection_color = style.selection
-        -- Only call is_search_selection if the method exists
         if type(self.doc.is_search_selection) == "function" and self.doc:is_search_selection(line1, s, line, e) then
           selection_color = style.search_selection or style.caret
         end
