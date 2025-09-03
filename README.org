@@ -54,17 +54,16 @@ This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible t
 -- BUGS ----------------------------------------------------------------------
 
 -- FIX: vi { } go confused by other opening brackets
--- FIX: arragne state variables like mod_keys
+-- FIX: arrage state variables like mod_keys
 -- FIX: clean i and a, maybe they can become translations since same arguments
 
 -- FEATURES ------------------------------------------------------------------
 
--- TODO: impelement insert count + "i or a" + input then <esc>
--- TODO: make control robust, handle input gets lost sometimes 
--- TODO: yank using yiw or yi{} not flashing
+-- TODO: make text color change when flashing
+-- TODO: <Medium> impelement insert count + "i or a" + input then <esc> 
 -- TODO: clean code and arragne to ease moving forward
--- TODO: . think about how to implement repeat last change
-
+-- TODO: implement visual block
+-- TODO: implement jumps
 -- TODO: clean code before becoming unmaintable (KISS)
 -- TODO: implement: r replace single character, the next "key" goes in place of selected char
 -- TODO: implement: ~ toggle case of the current char
@@ -79,10 +78,10 @@ This plugin is inspired by Evil (Emacs) and aims to be as faithful as possible t
 -- TODO: add disable vim config, to allow user enable or disable it
 -- TODO: how to test vim, it is starting to be big, minor change is going to effect other areas
 -- TODO: enable only overrides only when vim plugin is loaded
--- TODO: <command line> enhance command line messaging system with FiFo with time
--- TODO: make text color change when flashing
 
 -- DONE -----------------------------------------------------------------------
+-- DONE: <command line> enhance command line messaging system with FiFo with time
+-- DONE: make control robust, handle input gets lost sometimes 
 -- DONE: implement "<"
 -- DONE: implemented ">"
 -- DONE: tab = space, vim uses both tab and space
