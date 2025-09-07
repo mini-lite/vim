@@ -1,19 +1,21 @@
+-- mod-version:3
 -- Module: vim
 -- Author: S.Ghamri
 -------------------------------------------------------------
 
+-- FIX: resolve_motion like yy must work with 5yw not working
 -- TODO: update the find match function, reduce code
+-- TODO: implement t: before occurrence and T: after occurrence
 
--- mod-version:3
-local core = require("core")
-local common = require("core.common")
-local command = require("core.command")
-local style = require("core.style")
+local core      = require("core")
+local common    = require("core.common")
+local command   = require("core.command")
+local style     = require("core.style")
 local translate = require("core.doc.translate")
-local DocView = require("core.docview")
-local config = require("core.config")
-local search = require("core.doc.search")
-local keymap = require("core.keymap")
+local DocView   = require("core.docview")
+local config    = require("core.config")
+local search    = require("core.doc.search")
+local keymap    = require("core.keymap")
 
 config.vim = {
   unified_search = true,
@@ -54,7 +56,8 @@ vim.registers = {
 }
 
 local state = { -- state to track commands
-  count = 1,
+  count = "",
+  count2 = "",
   operator = nil,
   text_object = nil,
   motion_prefix = nil,
@@ -63,6 +66,10 @@ local state = { -- state to track commands
 }
 
 -- m: helpers
+local function get_count()
+  return tonumber(state.count) or 1
+end
+
 local function get_doc() -- gets active document view
   local dv = core.active_view
   if not dv or not dv.doc then
@@ -106,12 +113,8 @@ local function deselect(to_start) -- collapse selection
   end
 end
 
-local function get_count()
-  return tonumber(state.count) or 1
-end
-
 local function reset_state()
-  state.count = 1
+  state.count = ""
   state.operator = nil
   state.motion = nil
   state.motions_prefix = nil
@@ -163,11 +166,6 @@ forward_search:set_prompt("/")
 local backward_search = decorate_with_vim(command_line.new())
 backward_search:set_prompt("?")
 
-local function echo(fmt, ...)
-  local text = string.format(fmt, ...)
-  command_line.show_message({ text }, 1)
-end
-
 -- keys that can input
 local input_keys = {
   ["return"] = true,
@@ -201,6 +199,20 @@ vim.remap_keys = {
   ["right"] = "l",
 }
 
+-- known vim prefixes
+vim.prefix = {
+  i = true,
+  a = true,
+  f = true,
+  F = true,
+  t = true,
+  T = true,
+  g = true,
+  G = true,
+  z = true,
+  Z = true,
+}
+
 -- accumulate keys
 local pending = ""
 local prev_dig = false
@@ -211,46 +223,52 @@ local function handle_input(key)
     return false -- release input
   end
 
-  -- pass if no operator and no vim control key
+  -- accumulate count digits only if no operator pending
+  if key:match("[1-9]") or (key == "0" and prev_dig) then
+    prev_dig = true
+    state.count = (state.count or "") .. key
+    return true
+  end
 
-  -- pending too long, reset
-  if #pending > 3 then
+  -- smoothing: x count <operator> x count (prefix+motion)
+  if vim.motions[key] == nil
+     and vim.operators[key] == nil
+     and vim.normal_keys[key] == nil
+     and vim.visual_keys[key] == nil
+     and vim.prefix[key] == nil
+     and not vim.prefix[pending:sub(1, 1)]
+     or #pending > 2
+  then
+    vim.echo("!!!smoothness filter!!!")
     pending = ""
     reset_state()
     return true
   end
 
-  -- accumulate count digits only if no operator pending
-  if not state.operator and (key:match("[1-9]") or (key == "0" and prev_dig)) then
-    prev_dig = true
-    state.count = (state.count == 1 and "" or tostring(state.count)) .. key
-    return true
-  end
-
   pending = pending .. key -- by now all numbers are filtred
   prev_dig = false -- other key then digit is pressed
-  echo("Keys: %s<%s>", state.count, pending)
+  vim.echo("Command: %s <%s> %s", state.count, pending, state.count2)
 
   if vim.mode == "normal" then
     state.operator = vim.operators["move"] -- default normal mode operator
 
-    -- we have composite motion
-    if not (#pending == 2 and pending:sub(1, 1):match("[fFtT]")) then
-      -- normal key like i and v but we are not in middle of motion
+    if not (#pending == 2 and vim.prefix[pending:sub(1, 1)]) then -- not in a motion
+
       if vim.normal_keys and vim.normal_keys[key] then
         vim.normal_keys[key]()
         pending = ""
-        reset_state()
+        --reset_state() -- Do not reset so we do not lose count
         return true
       end
 
-      if vim.normal_keys and vim.normal_keys[pending] then
+      if vim.normal_keys and vim.normal_keys[pending] then -- normal keymaps combos
         vim.normal_keys[pending]()
         pending = ""
         reset_state()
         return true
       end
     end
+
   elseif vim.mode == "visual" or vim.mode == "visual-line" then
     if vim.visual_keys and vim.visual_keys[key] then
       vim.visual_keys[key]()
@@ -269,7 +287,7 @@ local function handle_input(key)
     state.operator = vim.operators["line_select"]
   end
 
-  -- 1. operator go o-pending waiting for motion
+  -- operator go o-pending waiting for motion
   if vim.operators[pending] and vim.mode ~= "o-pending" then
     state.operator = vim.operators[pending]
     local count = get_count()
@@ -283,10 +301,10 @@ local function handle_input(key)
     return true
   end
 
-  -- 2. simple motions like h, j, k, l, w, e, etc.
+  -- execute motions
   if vim.motions[pending] then
     local count = get_count()
-    if state.operator then -- there is an operator already
+    if state.operator then
       state.operator(count, vim.motions[pending], nil, nil)
     end
     pending = ""
@@ -294,7 +312,7 @@ local function handle_input(key)
     return true
   end
 
-  -- 3. pending with prefix i or a
+  -- pending with prefix i or a
   if #pending == 2 and pending:sub(1, 1):match("[iafFtT]") then
     state.motion_prefix = pending:sub(1, 1)
     state.text_object = pending:sub(2, 2)
@@ -466,7 +484,7 @@ local vim_ex_commands = {
       end
       local filepath = doc.abs_filename
       system.set_clipboard(filepath)
-      echo("%s", filepath)
+      vim.echo("%s", filepath)
     end,
     desc = "Retrieve File Path",
   },
@@ -811,29 +829,39 @@ local function put(direction, count)
   end
 end
 
-resolve_motion = function(motion, motion_prefix, text_object)
+resolve_motion = function(l, c, motion, motion_prefix, text_object) -- only region return 4 values
   local doc = get_doc()
   if not doc then
     return
   end
-  local l2, c2 = doc:get_selection()
+
+  if not l or not c then
+    l, c = doc:get_selection()
+  end
 
   if motion_prefix and text_object then
     if motion_prefix == "a" or motion_prefix == "i" then
-      return get_region(l2, c2, motion_prefix, text_object)
+      return get_region(l, c, motion_prefix, text_object)
     elseif motion_prefix == "f" or motion_prefix == "F" then
       local this_char = get_translation("this-char")
       local dir = motion_prefix == "f" and 1 or -1
-      local l1, c1 = this_char(doc, l2, c2, text_object, dir)
-      return l1, c1, l2, c2
+      local newl, newc = this_char(doc, l, c, text_object, dir)
+      if newl ~= l then
+        newl = l
+        newc = c
+      end
+      return newl, newc, nil, nil
+    elseif motion_prefix == "t" or motion_prefix == "T" then
+      -- TODO: implement 't' and 'T'
     end
   end
 
   if motion and type(motion) == "function" then
     -- new l, new c, old l, old c
-    return motion(doc, l2, c2)
+    return motion(doc, l, c)
   end
 end
+
 
 -- m: operators
 vim.operators = {
@@ -844,27 +872,33 @@ vim.operators = {
     end
     local l1, c1, l2, c2
     for _ = 1, count do
-      l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
+      l1, c1, _, _ = resolve_motion(nil, nil, motion, motion_prefix, text_object)
+      if not (l1 and c1) then
+        return
+      end
+      doc:set_selection(l1, c1, l1, c1)
+      center_selection_in_view(doc, l1)
     end
-    if not (l1 and c1 and l2 and c2) then
-      return
-    end
-    doc:set_selection(l1, c1, l1, c1)
-    center_selection_in_view(doc, l1)
   end,
-  ["select"] = function(_, motion, motion_prefix, text_object)
+  ["select"] = function(count, motion, motion_prefix, text_object)
     local doc = get_doc()
     if not doc then
       return
     end
     local endl, endc, startl, startc = doc:get_selection()
     local l, c
-    -- if return equl pair then just movement
-    endl, endc, l, c = resolve_motion(motion, motion_prefix, text_object)
-    if not (endl == l and endc == c) then
-      startl = l
-      startc = c
+
+    for i = 1, count do
+      endl, endc, l, c = resolve_motion(endl, endc, motion, motion_prefix, text_object)
     end
+
+    if l and c then
+      if not (endl == l and endc == c) then -- region 
+        startl = l
+        startc = c
+      end
+    end
+
     if not (endl and endc and startl and startc) then
       return
     end
@@ -876,7 +910,7 @@ vim.operators = {
       return
     end
     local endl, endc, startl, startc = doc:get_selection() -- line already selected
-    endl, endc = resolve_motion(motion, motion_prefix, text_object)
+    endl, endc = resolve_motion(nil, nil, motion, motion_prefix, text_object)
     if not (endl and endc and startl and startc) then
       return
     end
@@ -911,20 +945,29 @@ vim.operators = {
   end,
   ["d"] = function(_, motion, motion_prefix, text_object)
     if motion or (motion_prefix and text_object) then
-      local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
       local doc = get_doc()
       if not doc then
         return
       end
+      local l1, c1, l2, c2 = resolve_motion(nil, nil, motion, motion_prefix, text_object)
       doc:set_selection(l1, c1, l2, c2)
     end
     delete()
     vim.set_mode("normal") -- after y and p return to normal
   end,
-  ["y"] = function(_, motion, motion_prefix, text_object)
+  ["y"] = function(count, motion, motion_prefix, text_object)
+    local doc = get_doc()
+    if not doc then
+      return
+    end
+    local l, c = doc:get_selection()
     if motion or (motion_prefix and text_object) then
-      local l1, c1, l2, c2 = resolve_motion(motion, motion_prefix, text_object)
-      yank(l1, c1, l2, c2, 0.6)
+      local oldl, oldc = l, c
+      local newl, newc = l, c
+      for i = 1, count do
+        newl, newc, oldl, oldc = resolve_motion(newl, newc, motion, motion_prefix, text_object)
+      end
+      yank(newl, newc, l, c, 0.6)
     else
       yank(nil, nil, nil, nil, 0.6)
     end
@@ -1195,7 +1238,7 @@ vim.motions = {
     local new_l, new_c = doc:position_offset(l, c, -1)
     vim.max_col = new_c
     vim.dir = 0
-    return new_l, new_c, new_l, new_c
+    return new_l, new_c, nil, nil 
   end,
 
   ["l"] = function(doc, l, c)
@@ -1206,29 +1249,29 @@ vim.motions = {
     local new_l, new_c = doc:position_offset(l, c, 1)
     vim.max_col = new_c
     vim.dir = 0
-    return new_l, new_c, new_l, new_c
+    return new_l, new_c, nil, nil
   end,
 
   ["j"] = function(_, l, _)
     vim.dir = -1
-    return l + 1, vim.max_col, l + 1, vim.max_col
+    return l + 1, vim.max_col, nil, nil
   end,
 
   ["k"] = function(_, l, _)
     vim.dir = 1
-    return l - 1, vim.max_col, l - 1, vim.max_col
+    return l - 1, vim.max_col, nil, nil
   end,
 
   ["w"] = function(doc, l, c)
     local l2, c2 = l, c
     local next_word_start = get_translation("next-word-start")
     l2, c2 = next_word_start(doc, l, c)
-    return l2, c2, l2, c2
+    return l2, c2, nil, nil
   end,
   ["b"] = function(doc, l, c)
     local previous_word_start = get_translation("previous-word-start")
     l, c = previous_word_start(doc, l, c)
-    return l, c, l, c
+    return l, c, nil, nil
   end,
 
   ["e"] = function(doc, l, c)
@@ -1236,26 +1279,26 @@ vim.motions = {
     local word_end = get_translation("end-of-word")
     l, c = next_word_start(doc, l, c)
     l, c = word_end(doc, l, c)
-    return l, c, l, c
+    return l, c, nil, nil
   end,
 
   ["0"] = function(doc, _, _)
     local line, _ = doc:get_selection()
-    return line, 1, line, 1
+    return line, 1, nil, nil
   end,
 
   ["^"] = function(doc, _, _)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local first_non_ws = text:find("%S") or 1
-    return line, first_non_ws, line, first_non_ws
+    return line, first_non_ws, nil, nil
   end,
 
   ["$"] = function(doc, _, _)
     local line, _ = doc:get_selection()
     local text = doc.lines[line] or ""
     local last_col = #text + 1
-    return line, last_col, line, last_col
+    return line, last_col, nil, nil
   end,
 
   ["gg"] = function(_, _, _)
@@ -1265,13 +1308,13 @@ vim.motions = {
     else
       line = 1
     end
-    return line, 1, line, 1
+    return line, 1, nil, nil
   end,
 
   ["G"] = function(doc, _, _)
     local last_line = #doc.lines
     local last_col = #(doc.lines[last_line] or "") + 1
-    return last_line, last_col, last_line, last_col
+    return last_line, last_col, nil, nil
   end,
 
   ["d"] = function(doc, l, _)
@@ -1326,7 +1369,7 @@ vim.normal_keys = {
       return
     end
     doc:undo()
-    echo("undo")
+    vim.echo("undo")
   end,
   ["ctrl+r"] = function()
     local doc = get_doc()
@@ -1334,7 +1377,7 @@ vim.normal_keys = {
       return
     end
     doc:redo()
-    echo("redo")
+    vim.echo("redo")
   end,
   ["o"] = function()
     local doc = get_doc()
