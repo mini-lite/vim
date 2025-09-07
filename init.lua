@@ -3,9 +3,11 @@
 -- Author: S.Ghamri
 -------------------------------------------------------------
 
--- FIX: resolve_motion like yy must work with 5yw not working
--- TODO: update the find match function, reduce code
 -- TODO: implement t: before occurrence and T: after occurrence
+-- TODO: how to repeat last command
+-- FIX: resolve_motion like: follow delete example 
+--        yy must work, it should select the full line
+--        5yw not working
 
 local core      = require("core")
 local common    = require("core.common")
@@ -257,7 +259,6 @@ local function handle_input(key)
       if vim.normal_keys and vim.normal_keys[key] then
         vim.normal_keys[key]()
         pending = ""
-        --reset_state() -- Do not reset so we do not lose count
         return true
       end
 
@@ -1680,8 +1681,7 @@ end
 
 vim.set_mode("normal") -- initialization
 
--- TODO: we defined two echo fix it
-vim.echo = function(fmt, ...)
+vim.echo = function(fmt, ...) -- debug helper
   local text = string.format(fmt, ...)
   command_line.show_message({ text }, 1)
 end
@@ -1704,3 +1704,4 @@ vim.confirm = function(message, cb)
 end
 
 return vim
+
